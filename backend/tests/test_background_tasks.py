@@ -2,7 +2,7 @@ import asyncio
 import pytest
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from app.services.notification_queue import (
     NotificationQueueService,
     NOTIFICATION_QUEUE_KEY,

@@ -117,10 +117,8 @@ fun EmergencyAlertScreen(
                             try {
                                 val resp = ApiClient.service.acceptEmergencyDispatch(
                                     AcceptDispatchPayload(
-                                        requestId = requestId,
-                                        donorId = "current-user",
-                                        latitude = 12.9716,
-                                        longitude = 77.5946
+                                        action = "ACCEPT",
+                                        requestId = requestId
                                     )
                                 )
                                 if (resp.isSuccessful) {

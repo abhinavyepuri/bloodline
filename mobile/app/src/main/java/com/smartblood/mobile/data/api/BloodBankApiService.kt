@@ -14,19 +14,19 @@ interface BloodBankApiService {
     suspend fun getCurrentUser(): Response<UserProfile>
 
     // Donor profile & availability endpoints
-    @GET("donors/profile")
+    @GET("donors/me")
     suspend fun getDonorProfile(): Response<DonorProfile>
 
     @PATCH("donors/availability")
     suspend fun updateAvailability(@Body body: Map<String, Boolean>): Response<DonorProfile>
 
-    @POST("donors/location")
-    suspend fun updateLocation(@Body location: Map<String, Double>): Response<Unit>
+    @POST("donors/me/telemetry")
+    suspend fun updateLocation(@Body telemetry: Map<String, Double>): Response<Unit>
 
     // Active Emergency Requests & Responses
-    @GET("requests/active")
+    @GET("donors/requests/active")
     suspend fun getActiveRequests(): Response<List<BloodRequestItem>>
 
-    @POST("requests/accept")
+    @POST("donors/respond")
     suspend fun acceptEmergencyDispatch(@Body payload: AcceptDispatchPayload): Response<Map<String, Any>>
 }

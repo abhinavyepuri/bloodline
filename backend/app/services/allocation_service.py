@@ -21,7 +21,7 @@ from app.models.allocation import (
 from app.models.audit import AllocationAuditLog
 from app.models.donor import Donor
 from app.models.hospital import Hospital
-from app.models.inventory import BloodComponentType, UnitStatus
+from app.models.inventory import UnitStatus
 from app.models.request import BloodRequest, RequestStatus
 from app.repositories.donor_repo import DonorRepository
 from app.repositories.inventory_repo import InventoryRepository
@@ -509,13 +509,22 @@ class AllocationService:
         # never reached the donor, and those are worth telling apart.
         alert_zone = await lock_mgr.get_alerted_donors(canonical_id)
         if donor_id not in alert_zone:
-            if await lock_mgr.alert_zone_ttl(canonical_id) is None:
+            # If the request is still open and needing units, and donor is compatible, allow claim
+            if (
+                request.status in (RequestStatus.PROXIMITY_ZONE_NOTIFIED, RequestStatus.RE_PLANNING)
+                and request.units_covered < request.units_requested
+                and donor.blood_group in self._compatible_groups_for(request)
+            ):
+                await lock_mgr.register_alerted_donors(canonical_id, [donor_id], ttl_seconds=180)
+                alert_zone.add(donor_id)
+            else:
+                if await lock_mgr.alert_zone_ttl(canonical_id) is None:
+                    raise DomainException(
+                        "The response window for this request has closed.", 409
+                    )
                 raise DomainException(
-                    "The response window for this request has closed.", 409
+                    "You were not alerted for this request, so it is not open to you.", 403
                 )
-            raise DomainException(
-                "You were not alerted for this request, so it is not open to you.", 403
-            )
 
         if action.upper() == "DECLINE":
             await lock_mgr.remove_alerted_donor(canonical_id, donor_id)

@@ -93,10 +93,6 @@ class ConcurrencyLockManager:
     def _slot_key(request_id: str, index: int) -> str:
         return f"lock:hard:req:{request_id}:unit:{index}"
 
-    @staticmethod
-    def _timeout_key(request_id: str) -> str:
-        return f"alert:timeout:{request_id}"
-
     # ------------------------------------------------------------ soft lock
     async def register_alerted_donors(
         self, request_id: str, donor_ids: List[str], ttl_seconds: int = 180

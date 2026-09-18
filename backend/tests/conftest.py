@@ -59,7 +59,7 @@ DEMO_ACCOUNTS: Dict[str, str] = {
 
 
 @pytest.fixture(autouse=True)
-def isolated_redis_client() -> AsyncGenerator[None, None]:
+def isolated_redis_client():
     """
     Give every test its own Redis client.
 

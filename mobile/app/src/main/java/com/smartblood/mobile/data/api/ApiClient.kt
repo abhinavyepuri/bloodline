@@ -17,6 +17,20 @@ object ApiClient {
     var WS_URL: String = "ws://10.0.2.2:8000/api/v1/realtime/ws"
 
     private var authToken: String? = null
+    private var retrofitInstance: Retrofit? = null
+
+    fun setServerHost(hostAndPort: String) {
+        val clean = hostAndPort.trim()
+            .removePrefix("http://")
+            .removePrefix("https://")
+            .removePrefix("ws://")
+            .removePrefix("wss://")
+            .removeSuffix("/")
+        val hostWithPort = if (clean.contains(":")) clean else "$clean:8000"
+        BASE_URL = "http://$hostWithPort/api/v1/"
+        WS_URL = "ws://$hostWithPort/api/v1/realtime/ws"
+        retrofitInstance = null
+    }
 
     fun setAuthToken(token: String?) {
         authToken = token
@@ -48,12 +62,17 @@ object ApiClient {
             .build()
     }
 
-    val service: BloodBankApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl(BASE_URL)
-            .client(okHttpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(BloodBankApiService::class.java)
-    }
+    val service: BloodBankApiService
+        get() {
+            var instance = retrofitInstance
+            if (instance == null) {
+                instance = Retrofit.Builder()
+                    .baseUrl(BASE_URL)
+                    .client(okHttpClient)
+                    .addConverterFactory(GsonConverterFactory.create())
+                    .build()
+                retrofitInstance = instance
+            }
+            return instance.create(BloodBankApiService::class.java)
+        }
 }

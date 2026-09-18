@@ -33,12 +33,19 @@ class MainActivity : ComponentActivity() {
                                 // Start WebSocket client for real-time dispatch alerts
                                 webSocketClient = BloodWebSocketClient(
                                     onNotificationReceived = { notification ->
-                                        // Navigate to emergency alert if critical broadcast received
-                                        navController.navigate("alert/${notification.requestId}")
+                                        if (notification.type == "EMERGENCY_DISPATCH_ALERT" && notification.requestId.isNotBlank()) {
+                                            runOnUiThread {
+                                                try {
+                                                    navController.navigate("alert/${notification.requestId}")
+                                                } catch (e: Exception) {
+                                                    android.util.Log.e("MainActivity", "Navigation to alert failed: ${e.message}")
+                                                }
+                                            }
+                                        }
                                     },
                                     onConnectionStateChanged = { /* handle connection state */ }
                                 )
-                                webSocketClient?.connect("mobile-donor-session")
+                                webSocketClient?.connect(token)
                                 navController.navigate("donor_home") {
                                     popUpTo("login") { inclusive = true }
                                 }

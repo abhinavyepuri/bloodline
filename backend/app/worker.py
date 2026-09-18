@@ -10,9 +10,8 @@ Runs detached from HTTP API servers to process decoupled tasks:
 import asyncio
 import logging
 import signal
-import sys
 from app.core.config import settings
-from app.core.redis import get_redis, close_redis
+from app.core.redis import close_redis
 from app.services.notification_queue import NotificationQueueService
 from app.services.event_sweeper import redis_keyspace_listener
 from app.services.inventory_service import run_lifecycle_sweep, check_near_expiry_units

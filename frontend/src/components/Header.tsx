@@ -1,152 +1,185 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
-import { Activity, ShieldAlert, Building2, Droplet, UserCheck, Radio, LogOut } from 'lucide-react';
+import { Activity, Building2, Droplet, Heart, Radio, LogOut, Wifi, WifiOff, Shield } from 'lucide-react';
 import { UserRole } from '../types';
-import { DEV_ROLE_SWITCHER } from '../config';
 
 export const Header: React.FC = () => {
-  const { user, activeRole, switchRole, isLoading, logout } = useAuth();
+  const { user, activeRole, logout } = useAuth();
   const { isConnected } = useWebSocket();
 
-  const roleConfigs: { label: string; role: UserRole; email?: string; icon: React.ReactNode }[] = [
-    { label: 'City Overview', role: 'COORDINATOR', icon: <Radio size={16} /> },
-    { label: 'Hospital Desk', role: 'HOSPITAL', icon: <Building2 size={16} /> },
-    { label: 'Blood Bank Storage', role: 'BLOOD_BANK', icon: <Droplet size={16} /> },
-    { label: 'Volunteer: Alice', role: 'DONOR', email: 'alice@donor.org', icon: <UserCheck size={16} /> },
-    { label: 'Volunteer: Bob', role: 'DONOR', email: 'bob@donor.org', icon: <UserCheck size={16} /> },
-  ];
+  const getRoleBadge = (role: UserRole | null) => {
+    switch (role) {
+      case 'HOSPITAL':
+        return {
+          label: 'Hospital Trauma Desk',
+          icon: <Building2 size={15} />,
+          bg: 'rgba(239, 68, 68, 0.12)',
+          border: 'rgba(239, 68, 68, 0.3)',
+          color: 'var(--crimson-500)',
+        };
+      case 'BLOOD_BANK':
+        return {
+          label: 'Cold-Chain Blood Bank',
+          icon: <Droplet size={15} />,
+          bg: 'rgba(217, 119, 6, 0.12)',
+          border: 'rgba(217, 119, 6, 0.3)',
+          color: 'var(--amber-500)',
+        };
+      case 'DONOR':
+        return {
+          label: 'Volunteer Donor',
+          icon: <Heart size={15} />,
+          bg: 'rgba(22, 163, 74, 0.12)',
+          border: 'rgba(22, 163, 74, 0.3)',
+          color: 'var(--emerald-500)',
+        };
+      case 'COORDINATOR':
+      case 'ADMIN':
+        return {
+          label: role === 'ADMIN' ? 'System Administrator' : 'Emergency Operations Center',
+          icon: role === 'ADMIN' ? <Shield size={15} /> : <Radio size={15} />,
+          bg: 'rgba(37, 99, 235, 0.12)',
+          border: 'rgba(37, 99, 235, 0.3)',
+          color: 'var(--cyan-500)',
+        };
+      default:
+        return {
+          label: 'Authorized User',
+          icon: <Activity size={15} />,
+          bg: 'rgba(100, 116, 139, 0.1)',
+          border: 'var(--border-subtle)',
+          color: 'var(--text-muted)',
+        };
+    }
+  };
+
+  const badge = getRoleBadge(activeRole);
 
   return (
-    <header style={{
-      background: 'rgba(255, 255, 255, 0.9)',
-      backdropFilter: 'blur(16px)',
-      borderBottom: '1px solid var(--border-subtle)',
-      position: 'sticky',
-      top: 0,
-      zIndex: 50,
-      padding: '0.75rem 1.5rem'
-    }}>
-      <div style={{
-        maxWidth: '1400px',
-        margin: '0 auto',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem'
-      }}>
-        {/* Brand & Connection Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '40px',
-            height: '40px',
-            borderRadius: '10px',
-            background: 'linear-gradient(135deg, var(--crimson-500), #991b1b)',
-            boxShadow: '0 0 15px var(--crimson-glow)',
-            color: 'white'
-          }}>
+    <header
+      style={{
+        background: 'rgba(255, 255, 255, 0.95)',
+        backdropFilter: 'blur(16px)',
+        borderBottom: '1px solid var(--border-subtle)',
+        position: 'sticky',
+        top: 0,
+        zIndex: 50,
+        padding: '0.75rem 1.5rem',
+      }}
+    >
+      <div
+        style={{
+          maxWidth: '1440px',
+          margin: '0 auto',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '1rem',
+        }}
+      >
+        {/* Brand & Mission Statement */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '42px',
+              height: '42px',
+              borderRadius: '12px',
+              background: 'linear-gradient(135deg, var(--crimson-500), #991b1b)',
+              boxShadow: '0 4px 14px var(--crimson-glow)',
+              color: 'white',
+            }}
+          >
             <Activity size={24} />
           </div>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <h1 style={{ fontSize: '1.25rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
-                SmartBlood <span style={{ color: 'var(--crimson-500)', fontSize: '0.85rem', fontWeight: 600 }}>LIVE</span>
-              </h1>
-              <span className={`pulse-dot ${isConnected ? '' : 'pulse-red'}`} title={isConnected ? 'Real-time WebSocket active' : 'Connecting...'} />
-              <span style={{ fontSize: '0.75rem', color: isConnected ? 'var(--emerald-400)' : 'var(--crimson-500)', fontWeight: 600 }}>
-                {isConnected ? 'ONLINE & READY' : 'CONNECTING...'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <span style={{ fontSize: '1.2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-main)' }}>
+                SmartBlood
+              </span>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  padding: '0.2rem 0.55rem',
+                  borderRadius: '12px',
+                  background: isConnected ? 'rgba(22, 163, 74, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                  color: isConnected ? 'var(--emerald-600)' : 'var(--crimson-500)',
+                  border: `1px solid ${isConnected ? 'rgba(22, 163, 74, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`,
+                }}
+              >
+                {isConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
+                {isConnected ? 'LIVE CONNECTED' : 'RECONNECTING...'}
               </span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Fast Blood Delivery & Volunteer Donor Emergency Network
+              Unified Emergency Blood Coordination & Dispatch Network
             </p>
           </div>
         </div>
 
-        {/* Demo-only role switcher. Excluded from production builds. */}
-        {DEV_ROLE_SWITCHER && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--color-bg)', padding: '0.35rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', padding: '0 0.5rem', fontWeight: 600 }}>
-              SWITCH VIEW:
-            </span>
-            {roleConfigs.map((cfg) => {
-              const isSelected =
-                activeRole === cfg.role &&
-                (!cfg.email || (user && user.email === cfg.email));
+        {/* Authenticated User Status & Controls */}
+        {user && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            {/* Role Badge */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '8px',
+                background: badge.bg,
+                border: `1px solid ${badge.border}`,
+                color: badge.color,
+                fontSize: '0.78rem',
+                fontWeight: 700,
+              }}
+            >
+              {badge.icon}
+              <span>{badge.label}</span>
+            </div>
 
-              return (
-                <button
-                  key={cfg.label}
-                  id={`role-btn-${cfg.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
-                  disabled={isLoading}
-                  onClick={() => switchRole(cfg.role, cfg.email)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.4rem',
-                    padding: '0.4rem 0.75rem',
-                    fontSize: '0.8rem',
-                    fontWeight: 600,
-                    borderRadius: '6px',
-                    border: isSelected ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid transparent',
-                    background: isSelected ? 'rgba(239, 68, 68, 0.2)' : 'transparent',
-                    color: isSelected ? 'var(--color-primary)' : 'var(--text-muted)',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  {cfg.icon}
-                  {cfg.label}
-                </button>
-              );
-            })}
+            {/* User Profile Card */}
+            <div style={{ textAlign: 'right', lineHeight: 1.2 }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                {user.full_name}
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                {user.email}
+              </div>
+            </div>
+
+            {/* Sign Out Button */}
+            <button
+              onClick={logout}
+              title="Sign Out"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.45rem 0.85rem',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                borderRadius: '8px',
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--color-bg)',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <LogOut size={15} />
+              Sign Out
+            </button>
           </div>
         )}
-
-        {/* Signed-in identity + synthetic notice */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--amber-400)', background: 'rgba(245, 158, 11, 0.1)', padding: '0.35rem 0.65rem', borderRadius: '6px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-            <ShieldAlert size={14} />
-            <span>Demo Practice Mode</span>
-          </div>
-
-          {user && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <div style={{ textAlign: 'right', lineHeight: 1.2 }}>
-                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                  {user.full_name}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-                  {activeRole}
-                </div>
-              </div>
-              <button
-                onClick={logout}
-                title="Sign out"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.35rem',
-                  padding: '0.4rem 0.7rem',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  borderRadius: '6px',
-                  border: '1px solid var(--border-subtle)',
-                  background: 'transparent',
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer'
-                }}
-              >
-                <LogOut size={14} />
-                Sign out
-              </button>
-            </div>
-          )}
-        </div>
       </div>
     </header>
   );

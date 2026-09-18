@@ -81,6 +81,8 @@ export const BloodBankDashboard: React.FC = () => {
       lastEvent &&
       [
         'REQUEST_CREATED',
+        'REQUEST_UPDATED',
+        'EMERGENCY_BROADCAST_SENT',
         'INVENTORY_UNIT_ADDED',
         'INVENTORY_UNIT_STATUS_CHANGED',
         'INVENTORY_LOCKED',
@@ -239,7 +241,7 @@ export const BloodBankDashboard: React.FC = () => {
             <Clock size={32} color="var(--text-dim)" style={{ marginBottom: '0.5rem' }} />
             <p>No active hospital orders currently assigned to this blood bank.</p>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
-              Switch to <b>Hospital Desk</b> and send an emergency blood request to see it arrive here in real time!
+              When a partner hospital places an emergency blood request, cold-chain matching automatically reserves matching units and routes the order here in real time.
             </p>
           </div>
         ) : (
@@ -294,30 +296,49 @@ export const BloodBankDashboard: React.FC = () => {
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.4rem', textTransform: 'uppercase' }}>
                       Blood Bags Allocated From Our Storage:
                     </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                      {order.allocated_units.map((u) => (
-                        <div
-                          key={u.unit_id}
-                          style={{
-                            background: 'var(--color-bg)',
-                            padding: '0.4rem 0.75rem',
-                            borderRadius: '6px',
-                            border: '1px solid rgba(255, 255, 255, 0.1)',
-                            fontSize: '0.8rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                          }}
-                        >
-                          <Droplet size={13} color="var(--crimson-500)" />
-                          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>Bag {u.batch_number}</span>
-                          <span>({u.blood_group})</span>
-                          <span className={`badge ${u.unit_status === 'LOCKED_RESERVE' ? 'badge-amber' : u.unit_status === 'DISPATCHED' ? 'badge-green' : 'badge-red'}`} style={{ fontSize: '0.65rem' }}>
-                            {u.unit_status === 'LOCKED_RESERVE' ? 'Reserved' : u.unit_status === 'DISPATCHED' ? 'Dispatched' : 'Damaged'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                    {order.allocated_units.length === 0 ? (
+                      <div style={{
+                        background: 'rgba(245, 158, 11, 0.1)',
+                        border: '1px dashed rgba(245, 158, 11, 0.4)',
+                        borderRadius: '6px',
+                        padding: '0.6rem 0.85rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.6rem',
+                        fontSize: '0.8rem',
+                        color: 'var(--amber-400)',
+                      }}>
+                        <AlertTriangle size={16} />
+                        <span>
+                          Storage Depleted for {order.required_blood_group} ({order.component_type}) — Automated Matching Engine routed this demand to <b>Live Volunteer Donors</b> across the city.
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        {order.allocated_units.map((u) => (
+                          <div
+                            key={u.unit_id}
+                            style={{
+                              background: 'var(--color-bg)',
+                              padding: '0.4rem 0.75rem',
+                              borderRadius: '6px',
+                              border: '1px solid rgba(255, 255, 255, 0.1)',
+                              fontSize: '0.8rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                            }}
+                          >
+                            <Droplet size={13} color="var(--crimson-500)" />
+                            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>Bag {u.batch_number}</span>
+                            <span>({u.blood_group})</span>
+                            <span className={`badge ${u.unit_status === 'LOCKED_RESERVE' ? 'badge-amber' : u.unit_status === 'DISPATCHED' ? 'badge-green' : 'badge-red'}`} style={{ fontSize: '0.65rem' }}>
+                              {u.unit_status === 'LOCKED_RESERVE' ? 'Reserved' : u.unit_status === 'DISPATCHED' ? 'Dispatched' : 'Damaged'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Dispatch Action */}

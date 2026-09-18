@@ -1,39 +1,39 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { User, UserRole } from '../types';
-import { DEV_ROLE_SWITCHER } from '../config';
 import { api, loginRequest, setAuthToken, setUnauthorizedHandler } from '../lib/api';
 
 interface LoginResponse {
   access_token: string;
   token_type: string;
   role: UserRole;
+  user_id: string;
+  full_name: string;
+}
+
+export interface RegisterPayload {
+  email: string;
+  password: string;
+  full_name: string;
+  phone_number: string;
+  role: 'HOSPITAL' | 'BLOOD_BANK' | 'DONOR';
+  blood_group?: string;
+  facility_address?: string;
 }
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   activeRole: UserRole | null;
-  /** True until the persisted session has been checked, so we don't flash the login screen. */
   isBootstrapping: boolean;
   isLoading: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<void>;
+  register: (payload: RegisterPayload) => Promise<void>;
   logout: () => void;
-  /** Demo convenience only — compiled out of production builds. */
-  switchRole: (role: UserRole, emailOverride?: string) => Promise<void>;
 }
 
 const TOKEN_STORAGE_KEY = 'smartblood_token';
 const ROLE_STORAGE_KEY = 'smartblood_role';
-
-/** Preset demo accounts, used only by the development role switcher. */
-const PRESET_ACCOUNTS: Record<string, string> = {
-  HOSPITAL: 'hospital@smartblood.org',
-  BLOOD_BANK: 'bloodbank@smartblood.org',
-  DONOR: 'alice@donor.org',
-  COORDINATOR: 'coordinator@smartblood.org',
-  ADMIN: 'admin@smartblood.org',
-};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -54,8 +54,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem(ROLE_STORAGE_KEY);
   }, []);
 
-  // The API client calls this when it sees a 401, so an expired token drops the
-  // user back to the login screen instead of leaving every dashboard silently empty.
+  // When API client receives a 401 Unauthorized, automatically clear stale session
   useEffect(() => {
     setUnauthorizedHandler(clearSession);
     return () => setUnauthorizedHandler(null);
@@ -77,11 +76,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(true);
       setError(null);
       try {
-        const data = await loginRequest<LoginResponse>('/auth/login', { email, password });
+        const data = await loginRequest<LoginResponse>('/auth/login', {
+          email: email.trim().toLowerCase(),
+          password,
+        });
         await loadProfile(data.access_token, data.role);
       } catch (err) {
         clearSession();
-        setError(err instanceof Error ? err.message : 'Sign-in failed. Please try again.');
+        const msg = err instanceof Error ? err.message : 'Sign-in failed. Please verify your credentials.';
+        setError(msg);
         throw err;
       } finally {
         setIsLoading(false);
@@ -90,20 +93,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [clearSession, loadProfile]
   );
 
+  const register = useCallback(
+    async (payload: RegisterPayload) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        await api.post<User>('/auth/register', {
+          email: payload.email.trim().toLowerCase(),
+          password: payload.password,
+          full_name: payload.full_name.trim(),
+          phone_number: payload.phone_number.trim(),
+          role: payload.role,
+        });
+        // Log in immediately after successful registration
+        await login(payload.email.trim().toLowerCase(), payload.password);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Registration failed. Please check your details.';
+        setError(msg);
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [login]
+  );
+
   const logout = useCallback(() => {
     clearSession();
     setError(null);
   }, [clearSession]);
 
-  const switchRole = useCallback(
-    async (role: UserRole, emailOverride?: string) => {
-      const email = emailOverride ?? PRESET_ACCOUNTS[role] ?? PRESET_ACCOUNTS.COORDINATOR;
-      await login(email, 'password123');
-    },
-    [login]
-  );
-
-  // Resume a persisted session once, on mount.
+  // Resume a persisted session on mount
   useEffect(() => {
     const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
     const storedRole = localStorage.getItem(ROLE_STORAGE_KEY) as UserRole | null;
@@ -113,19 +133,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    let cancelled = false;
+    let isMounted = true;
     (async () => {
       try {
         await loadProfile(storedToken, storedRole);
       } catch {
-        if (!cancelled) clearSession();
+        if (isMounted) clearSession();
       } finally {
-        if (!cancelled) setIsBootstrapping(false);
+        if (isMounted) setIsBootstrapping(false);
       }
     })();
 
     return () => {
-      cancelled = true;
+      isMounted = false;
     };
   }, [clearSession, loadProfile]);
 
@@ -138,10 +158,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isLoading,
       error,
       login,
+      register,
       logout,
-      switchRole: DEV_ROLE_SWITCHER ? switchRole : async () => {},
     }),
-    [user, token, activeRole, isBootstrapping, isLoading, error, login, logout, switchRole]
+    [user, token, activeRole, isBootstrapping, isLoading, error, login, register, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

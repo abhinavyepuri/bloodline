@@ -1,6 +1,5 @@
-import os
 from typing import List, Optional, Union
-from pydantic import AnyHttpUrl, field_validator, model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Development-only default. Refused outside development (see _require_real_secret).

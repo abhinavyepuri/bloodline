@@ -1,10 +1,9 @@
 import logging
 import math
-from typing import Optional, Tuple
+from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from geoalchemy2 import Geography
 
 from app.core.redis import get_redis
 from app.models.allocation import Allocation, AllocationStatus

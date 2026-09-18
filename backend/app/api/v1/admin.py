@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.permissions import UserRole
 from app.models.allocation import COVERING_ALLOCATION_STATUSES, Allocation, AllocationSourceType, AllocationStatus
 from app.models.audit import AllocationAuditLog
 from app.models.donor import Donor
-from app.models.inventory import BloodComponentType, InventoryUnit, UnitStatus
+from app.models.inventory import InventoryUnit, UnitStatus
 from app.models.request import BloodRequest, RequestStatus
 from app.models.user import User
 from app.schemas.admin import AdminMetricsOut, AdminOverrideOut, AdminOverrideRequest, AdminOverviewOut

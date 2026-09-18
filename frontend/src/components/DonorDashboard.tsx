@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { api } from '../lib/api';
 import { BloodRequest, Donor, DonorRespondResult } from '../types';
-import { UserCheck, MapPin, CheckCircle, XCircle, Clock, AlertCircle, X } from 'lucide-react';
+import { UserCheck, MapPin, CheckCircle, XCircle, Clock, AlertCircle, X, Radio, Navigation } from 'lucide-react';
 
 const RESPONSE_WINDOW_SECONDS = 180;
 
@@ -43,6 +43,12 @@ export const DonorDashboard: React.FC = () => {
   /** Local anchors so the countdown keeps moving between server refreshes. */
   const alertDeadlinesRef = useRef<Record<string, number>>({});
 
+  // GPS & Telemetry Tracking State
+  const [gpsSyncing, setGpsSyncing] = useState(false);
+  const [gpsMessage, setGpsMessage] = useState<string | null>(null);
+  const [telemetrySending, setTelemetrySending] = useState(false);
+  const [telemetryStatus, setTelemetryStatus] = useState<string | null>(null);
+
   const fetchDonorData = useCallback(async () => {
     try {
       const [profile, alerts] = await Promise.all([
@@ -76,6 +82,7 @@ export const DonorDashboard: React.FC = () => {
       lastEvent &&
       [
         'EMERGENCY_DISPATCH_ALERT',
+        'REQUEST_CREATED',
         'DONOR_CLAIM_SUCCESS',
         'DONOR_STAND_DOWN',
         'DONOR_AVAILABILITY_CHANGED',
@@ -89,6 +96,76 @@ export const DonorDashboard: React.FC = () => {
 
   // Re-render every second while a response window is open.
   const tick = useCountdown(activeAlerts.length > 0);
+
+  const syncBrowserGps = () => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGpsMessage('Browser geolocation is not available in this environment.');
+      return;
+    }
+    setGpsSyncing(true);
+    setGpsMessage(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const lat = Number(pos.coords.latitude.toFixed(6));
+          const lon = Number(pos.coords.longitude.toFixed(6));
+          const updated = await api.patch<Donor>('/donors/availability', {
+            is_available: true,
+            latitude: lat,
+            longitude: lon,
+          });
+          setDonorProfile(updated);
+          setGpsMessage(`Live GPS locked: ${lat}, ${lon} (±${Math.round(pos.coords.accuracy)}m)`);
+        } catch (err) {
+          setGpsMessage(err instanceof Error ? err.message : 'Could not save GPS coordinates.');
+        } finally {
+          setGpsSyncing(false);
+        }
+      },
+      (err) => {
+        setGpsSyncing(false);
+        setGpsMessage(`GPS Error: ${err.message}`);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const transmitTelemetry = async (simulateNearHospital = false) => {
+    setTelemetrySending(true);
+    try {
+      // Default to Bangalore clinical geofence center if coordinates not yet acquired
+      let lat = donorProfile?.latitude ?? 12.9716;
+      let lon = donorProfile?.longitude ?? 77.5946;
+
+      if (simulateNearHospital) {
+        // Position ~300m north of Metro General Hospital (12.9716, 77.5946) to trigger 500m ward proximity alert
+        lat = 12.9740;
+        lon = 77.5946;
+      }
+
+      const res = await api.post<{
+        donor_id: string;
+        distance_km?: number;
+        estimated_transit_minutes?: number;
+        geofence_triggered?: boolean;
+        message?: string;
+      }>('/donors/me/telemetry', {
+        latitude: lat,
+        longitude: lon,
+        speed_kmh: 40.0,
+      });
+
+      setTelemetryStatus(
+        res.message ||
+        `Telemetry synced: ${res.distance_km ?? 0} km away, ETA ~${res.estimated_transit_minutes ?? 1} min`
+      );
+      await fetchDonorData();
+    } catch (err) {
+      setTelemetryStatus(err instanceof Error ? err.message : 'Telemetry transmission failed.');
+    } finally {
+      setTelemetrySending(false);
+    }
+  };
 
   const toggleAvailability = async () => {
     if (!donorProfile) return;
@@ -188,9 +265,48 @@ export const DonorDashboard: React.FC = () => {
               <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{donorProfile.total_successful_donations}</span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--cyan-400)' }}>
-              <MapPin size={14} />
-              <span>Location: City Center Area</span>
+            <div style={{
+              background: 'var(--color-bg)',
+              padding: '0.65rem 0.75rem',
+              borderRadius: '8px',
+              border: '1px solid var(--border-subtle)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.35rem',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <MapPin size={13} color="var(--cyan-400)" />
+                  GPS Location
+                </span>
+                <button
+                  type="button"
+                  onClick={syncBrowserGps}
+                  disabled={gpsSyncing}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--cyan-400)',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    cursor: gpsSyncing ? 'wait' : 'pointer',
+                    textDecoration: 'underline',
+                    padding: 0,
+                  }}
+                >
+                  {gpsSyncing ? 'Locking GPS...' : 'Sync Browser GPS'}
+                </button>
+              </div>
+              <div style={{ fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-main)' }}>
+                {donorProfile.latitude != null && donorProfile.longitude != null
+                  ? `${donorProfile.latitude.toFixed(4)}°, ${donorProfile.longitude.toFixed(4)}°`
+                  : 'Coordinates not synchronized'}
+              </div>
+              {gpsMessage && (
+                <div style={{ fontSize: '0.7rem', color: 'var(--emerald-400)', marginTop: '0.1rem' }}>
+                  {gpsMessage}
+                </div>
+              )}
             </div>
 
             {/* Availability Status */}
@@ -258,22 +374,77 @@ export const DonorDashboard: React.FC = () => {
 
         {lastResult && (
           <div style={{
-            background: 'rgba(16, 185, 129, 0.12)',
+            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 182, 212, 0.08))',
             border: '1px solid var(--emerald-500)',
-            padding: '0.85rem 1rem',
-            borderRadius: '8px',
-            marginBottom: '1rem',
-            fontSize: '0.85rem',
+            padding: '1.25rem',
+            borderRadius: '12px',
+            marginBottom: '1.25rem',
           }}>
-            <div style={{ fontWeight: 700, color: 'var(--emerald-600)' }}>
-              You are confirmed for this donation
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Navigation size={18} color="var(--emerald-400)" />
+                <span style={{ fontWeight: 800, color: 'var(--emerald-400)', fontSize: '1rem' }}>
+                  En-Route to Recipient Hospital
+                </span>
+              </div>
+              <span className="badge badge-green">DISPATCH CONFIRMED</span>
             </div>
-            <div style={{ marginTop: '0.3rem', color: 'var(--text-muted)' }}>
-              {lastResult.distance_km != null && <>Distance: <b>{lastResult.distance_km} km</b> &nbsp;|&nbsp; </>}
-              {lastResult.estimated_transit_minutes != null && <>ETA: <b>~{lastResult.estimated_transit_minutes} min</b> &nbsp;|&nbsp; </>}
-              {lastResult.units_covered != null && lastResult.units_requested != null && (
-                <>Hospital now has <b>{lastResult.units_covered} of {lastResult.units_requested}</b> bag(s) covered.</>
-              )}
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+              Thank you! You are confirmed to help this patient. Please head toward the hospital. Live GPS telemetry streams your position to calculate real-time ETA and trigger the trauma bay thaw alert.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.75rem', marginTop: '0.85rem', marginBottom: '0.85rem' }}>
+              <div style={{ background: 'var(--color-bg)', padding: '0.6rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>DISTANCE TO WARD</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '0.15rem' }}>
+                  {lastResult.distance_km != null ? `${lastResult.distance_km} km` : 'In Transit'}
+                </div>
+              </div>
+              <div style={{ background: 'var(--color-bg)', padding: '0.6rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>ESTIMATED TRANSIT (ETA)</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--cyan-400)', marginTop: '0.15rem' }}>
+                  {lastResult.estimated_transit_minutes != null ? `~${lastResult.estimated_transit_minutes} min` : 'Calculating...'}
+                </div>
+              </div>
+              <div style={{ background: 'var(--color-bg)', padding: '0.6rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>HOSPITAL COVERAGE</div>
+                <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--emerald-400)', marginTop: '0.25rem' }}>
+                  {lastResult.units_covered != null && lastResult.units_requested != null
+                    ? `${lastResult.units_covered} / ${lastResult.units_requested} Bags Covered`
+                    : '1 Bag Covered'}
+                </div>
+              </div>
+            </div>
+
+            {telemetryStatus && (
+              <div style={{ fontSize: '0.8rem', color: 'var(--cyan-400)', padding: '0.4rem 0.6rem', background: 'rgba(6, 182, 212, 0.1)', borderRadius: '6px', marginBottom: '0.75rem' }}>
+                📡 {telemetryStatus}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => transmitTelemetry(false)}
+                disabled={telemetrySending}
+                className="btn btn-secondary"
+                style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
+              >
+                <Radio size={14} />
+                {telemetrySending ? 'Pinging GPS...' : 'Transmit Live GPS Telemetry'}
+              </button>
+              <button
+                type="button"
+                onClick={() => transmitTelemetry(true)}
+                disabled={telemetrySending}
+                className="btn btn-cyan"
+                style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem' }}
+                title="Simulates moving to within 350m of hospital ward to trigger the 500m proximity trauma thaw alert"
+              >
+                <Navigation size={14} />
+                Simulate Ward Approach (&lt;500m)
+              </button>
             </div>
           </div>
         )}

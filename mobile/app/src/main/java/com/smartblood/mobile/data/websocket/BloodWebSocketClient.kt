@@ -15,8 +15,8 @@ class BloodWebSocketClient(
     private var webSocket: WebSocket? = null
     private val gson = Gson()
 
-    fun connect(clientId: String) {
-        val requestUrl = "${ApiClient.WS_URL}/$clientId"
+    fun connect(token: String) {
+        val requestUrl = "${ApiClient.WS_URL}?token=$token"
         val request = Request.Builder()
             .url(requestUrl)
             .build()

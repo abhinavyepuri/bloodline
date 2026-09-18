@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -122,7 +122,12 @@ async def get_active_emergency_alerts(
     req_res = await db.execute(
         select(BloodRequest)
         .options(selectinload(BloodRequest.allocations), selectinload(BloodRequest.hospital))
-        .where(BloodRequest.status == RequestStatus.PROXIMITY_ZONE_NOTIFIED)
+        .where(
+            BloodRequest.status.in_([
+                RequestStatus.PROXIMITY_ZONE_NOTIFIED,
+                RequestStatus.RE_PLANNING,
+            ])
+        )
         .order_by(BloodRequest.calculated_urgency_score.desc())
     )
 
@@ -149,15 +154,18 @@ async def get_active_emergency_alerts(
         ttl_val = raw_results[idx * 2 + 1]
         ttl_seconds = ttl_val if isinstance(ttl_val, int) and ttl_val >= 0 else None
 
-        if not is_member:
-            continue
-
-        # Plasma-derived components follow the plasma matrix, not the red-cell one.
+        # Biological compatibility: Plasma-derived components follow the plasma matrix, otherwise red-cell matrix.
         compatible_groups = MatchingEngineService.get_compatible_donor_types(
             request.required_blood_group, is_plasma=is_plasma_derived(request.component_type)
         )
         if donor.blood_group not in compatible_groups:
             continue
+
+        # If not already recorded in Redis (e.g. registered after request or TTL expired),
+        # enroll this compatible donor so they can immediately claim a unit.
+        if not is_member:
+            await lock_mgr.register_alerted_donors(request.id, [donor.id], ttl_seconds=180)
+            ttl_seconds = 180
 
         alerts.append(
             BloodRequestOut.model_validate(request).model_copy(
