@@ -93,6 +93,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 # Include API v1 and WebSocket gateways
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router, prefix=f"{settings.API_V1_STR}/realtime")
+app.include_router(ws_router, prefix="")
 
 
 @app.get("/health", tags=["Health"])

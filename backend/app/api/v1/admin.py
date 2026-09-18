@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from datetime import datetime, timezone
@@ -12,6 +12,8 @@ from app.models.allocation import Allocation, AllocationStatus, AllocationSource
 from app.models.audit import AllocationAuditLog
 from app.schemas.admin import AdminOverviewOut, AdminOverrideRequest, AdminOverrideOut
 from app.api.deps import get_current_user
+from app.seed import seed_data
+from app.websocket.connection_manager import manager
 
 router = APIRouter()
 
@@ -118,3 +120,14 @@ async def override_allocation(
         request_id=id,
         allocation_id=allocation.id if allocation else None
     )
+
+
+@router.post("/reset-seed")
+async def reset_seed_data(db: AsyncSession = Depends(get_db)):
+    """[DEMO SUPPORT] Reset database to Section 14 clean synthetic state."""
+    await seed_data()
+    await manager.broadcast({
+        "type": "SYSTEM_RESET",
+        "message": "Database reset to clean synthetic demo state (Section 14)."
+    })
+    return {"status": "SUCCESS", "message": "Database successfully re-seeded."}

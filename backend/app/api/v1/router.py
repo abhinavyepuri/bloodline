@@ -9,7 +9,7 @@ api_router.include_router(requests.router, prefix="/requests", tags=["Emergency 
 api_router.include_router(donors.router, prefix="/donors", tags=["Donors & Dispatch"])
 api_router.include_router(inventory.router, prefix="/inventory", tags=["Blood Bank Inventory"])
 api_router.include_router(audit.router, prefix="/audit", tags=["Explainability & Audit Logs"])
-api_router.include_router(admin.router, prefix="/admin", tags=["Admin & Coordination Control"])
+api_router.include_router(admin.router, prefix="/admin", tags=["Admin & System Administration"])
 
 
 @api_router.get("/health", tags=["Health"])
@@ -21,4 +21,3 @@ async def api_health_check():
         "environment": settings.ENVIRONMENT,
         "api_version": "v1"
     }
-

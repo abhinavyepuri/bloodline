@@ -1,7 +1,7 @@
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from app.core.database import get_db
 from app.models.user import User
 from app.models.donor import Donor
@@ -12,8 +12,33 @@ from app.schemas.allocation import DonorRespondRequest, DonorRespondOut
 from app.schemas.request import BloodRequestOut
 from app.services.allocation_service import AllocationService
 from app.api.deps import get_current_user
+from app.services.matching_service import MatchingEngineService
+from app.websocket.connection_manager import manager
 
 router = APIRouter()
+
+
+@router.get("/me", response_model=DonorOut)
+async def get_current_donor_profile(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """[USER-FACING] Retrieve current donor's profile, availability, and stats."""
+    res = await db.execute(select(Donor).where(Donor.user_id == current_user.id))
+    donor = res.scalars().first()
+    if not donor:
+        raise HTTPException(status_code=404, detail="Donor profile not found")
+    return DonorOut.model_validate(donor)
+
+
+@router.get("", response_model=List[DonorOut])
+async def list_donors(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """[USER-FACING] List registered donors (for Coordinator/Admin)."""
+    res = await db.execute(select(Donor).order_by(Donor.reliability_score.desc()))
+    return [DonorOut.model_validate(d) for d in res.scalars().all()]
 
 
 @router.patch("/availability", response_model=DonorOut)
@@ -36,46 +61,47 @@ async def update_donor_availability(
 
     await db.commit()
     await db.refresh(donor)
+
+    await manager.broadcast({
+        "type": "DONOR_AVAILABILITY_CHANGED",
+        "donor_id": donor.id,
+        "is_available": donor.is_available,
+        "latitude": donor.latitude,
+        "longitude": donor.longitude
+    })
+
     return DonorOut.model_validate(donor)
 
 
-@router.get("/requests/active", response_model=Optional[BloodRequestOut])
-async def get_active_donor_dispatch_request(
+@router.get("/requests/active", response_model=List[BloodRequestOut])
+async def get_active_emergency_alerts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """[USER-FACING] Fetches current pending emergency dispatch request assigned/notified to the donor."""
+    """
+    [USER-FACING] Retrieve active emergency blood requests that are broadcasting to this donor.
+    Filters for compatible blood requests in PROXIMITY_ZONE_NOTIFIED status.
+    """
     res = await db.execute(select(Donor).where(Donor.user_id == current_user.id))
     donor = res.scalars().first()
-    if not donor:
-        raise HTTPException(status_code=404, detail="Donor profile not found")
+    if not donor or not donor.is_available:
+        return []
 
-    # Check for active committed allocations first
-    alloc_res = await db.execute(
-        select(Allocation)
-        .where(
-            Allocation.donor_id == donor.id,
-            Allocation.status.in_([AllocationStatus.HARD_LOCKED, AllocationStatus.IN_TRANSIT])
-        )
-        .order_by(Allocation.created_at.desc())
-    )
-    active_alloc = alloc_res.scalars().first()
-    if active_alloc:
-        active_req = await db.get(BloodRequest, active_alloc.request_id)
-        if active_req and active_req.status not in (RequestStatus.FULFILLED, RequestStatus.CANCELLED, RequestStatus.EXPIRED):
-            return BloodRequestOut.model_validate(active_req)
-
-    # Check for open proximity zone notifications
+    # Get requests in PROXIMITY_ZONE_NOTIFIED
     req_res = await db.execute(
         select(BloodRequest)
         .where(BloodRequest.status == RequestStatus.PROXIMITY_ZONE_NOTIFIED)
-        .order_by(BloodRequest.calculated_urgency_score.desc(), BloodRequest.created_at.desc())
+        .order_by(BloodRequest.calculated_urgency_score.desc())
     )
-    latest_req = req_res.scalars().first()
-    if latest_req:
-        return BloodRequestOut.model_validate(latest_req)
+    all_active = list(req_res.scalars().all())
 
-    return None
+    compatible_requests = []
+    for r in all_active:
+        compatible_groups = MatchingEngineService.get_compatible_donor_types(r.required_blood_group)
+        if donor.blood_group in compatible_groups:
+            compatible_requests.append(BloodRequestOut.model_validate(r))
+
+    return compatible_requests
 
 
 @router.post("/requests/{id}/respond", response_model=DonorRespondOut)
@@ -98,4 +124,3 @@ async def respond_to_emergency_dispatch(
         action=resp.action
     )
     return DonorRespondOut.model_validate(result)
-
