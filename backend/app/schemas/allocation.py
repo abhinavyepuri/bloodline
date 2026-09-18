@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from typing import Optional, Any
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.models.allocation import AllocationSourceType, AllocationStatus
 
 
@@ -21,4 +21,28 @@ class AllocationOut(BaseModel):
 
 
 class DonorRespondRequest(BaseModel):
-    action: str  # "ACCEPT" or "DECLINE"
+    action: str = Field(..., description="Action: 'ACCEPT' or 'DECLINE'")
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True
+    )
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def normalize_action(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            normalized = v.strip().upper()
+            if normalized not in ("ACCEPT", "DECLINE"):
+                raise ValueError("Action must be either 'ACCEPT' or 'DECLINE'")
+            return normalized
+        return v
+
+
+class DonorRespondOut(BaseModel):
+    status: str
+    allocation_id: Optional[str] = None
+    donor_id: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+

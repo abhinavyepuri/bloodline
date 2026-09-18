@@ -8,6 +8,15 @@ class AllocationSourceType(str, Enum):
     BLOOD_BANK_INVENTORY = "BLOOD_BANK_INVENTORY"
     LIVE_DONOR = "LIVE_DONOR"
 
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
 
 class AllocationStatus(str, Enum):
     SOFT_LOCKED = "SOFT_LOCKED"
@@ -17,6 +26,16 @@ class AllocationStatus(str, Enum):
     CANCELLED_BY_DONOR = "CANCELLED_BY_DONOR"
     TIMED_OUT = "TIMED_OUT"
     RE_OPTIMIZED = "RE_OPTIMIZED"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
 
 
 class Allocation(TimestampedModel):

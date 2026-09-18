@@ -12,6 +12,15 @@ class TriageLevel(str, Enum):
     SCHEDULED_EMERGENCY_RESERVE = "SCHEDULED_EMERGENCY_RESERVE"    # Level 3: Scheduled urgent surgery (<4 hours)
     ROUTINE_CLINICAL = "ROUTINE_CLINICAL"                          # Level 4: Standard replenishment (<24 hours)
 
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
 
 class RequestStatus(str, Enum):
     PENDING_EVALUATION = "PENDING_EVALUATION"
@@ -21,6 +30,16 @@ class RequestStatus(str, Enum):
     FULFILLED = "FULFILLED"
     CANCELLED = "CANCELLED"
     EXPIRED = "EXPIRED"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
 
 
 class BloodRequest(TimestampedModel):

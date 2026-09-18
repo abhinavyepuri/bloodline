@@ -1,17 +1,43 @@
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from typing import Optional, Any
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.models.inventory import BloodComponentType
 from app.models.request import TriageLevel, RequestStatus
 
 
 class BloodRequestCreate(BaseModel):
-    patient_id_token: str
-    required_blood_group: str
-    component_type: BloodComponentType
-    units_requested: int = 1
-    triage_level: TriageLevel
-    deadline_at: datetime
+    patient_id_token: str = Field(..., min_length=1, description="Unique anonymized patient or case identifier")
+    required_blood_group: str = Field(..., min_length=1, max_length=5, description="Blood group e.g. O+, O-, A+, AB-")
+    component_type: BloodComponentType = Field(..., description="WHOLE_BLOOD, PRBC, PLATELETS, FFP, CRYOPRECIPITATE")
+    units_requested: int = Field(default=1, ge=1, description="Number of blood units needed")
+    triage_level: TriageLevel = Field(..., description="Triage priority level")
+    deadline_at: datetime = Field(..., description="Clinical deadline / required-by timestamp")
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True
+    )
+
+    @field_validator("required_blood_group", mode="before")
+    @classmethod
+    def normalize_blood_group(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip().upper()
+        return v
+
+    @field_validator("component_type", mode="before")
+    @classmethod
+    def normalize_component_type(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return BloodComponentType(v.strip().upper())
+        return v
+
+    @field_validator("triage_level", mode="before")
+    @classmethod
+    def normalize_triage_level(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return TriageLevel(v.strip().upper())
+        return v
 
 
 class BloodRequestOut(BaseModel):
@@ -28,3 +54,4 @@ class BloodRequestOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+

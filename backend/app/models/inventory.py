@@ -12,6 +12,15 @@ class BloodComponentType(str, Enum):
     FFP = "FFP"    # Fresh Frozen Plasma
     CRYOPRECIPITATE = "CRYOPRECIPITATE"
 
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
 
 class UnitStatus(str, Enum):
     AVAILABLE = "AVAILABLE"
@@ -20,6 +29,16 @@ class UnitStatus(str, Enum):
     TRANSFUSED = "TRANSFUSED"
     EXPIRED = "EXPIRED"
     QUARANTINED = "QUARANTINED"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
 
 
 class InventoryUnit(TimestampedModel):
