@@ -90,6 +90,36 @@ async def _replan_requests_holding_expired_units(db: AsyncSession) -> int:
     return len(affected)
 
 
+async def check_near_expiry_units(db: AsyncSession, hours_threshold: int = 24) -> int:
+    """Find units expiring within `hours_threshold` hours and alert staff dashboards."""
+    from datetime import timedelta
+    from app.websocket.connection_manager import manager
+
+    now = datetime.now(timezone.utc)
+    threshold = now + timedelta(hours=hours_threshold)
+    res = await db.execute(
+        select(InventoryUnit).where(
+            InventoryUnit.expiry_date > now,
+            InventoryUnit.expiry_date <= threshold,
+            InventoryUnit.status == UnitStatus.AVAILABLE,
+        )
+    )
+    near_expiry = list(res.scalars().all())
+    if near_expiry:
+        await manager.broadcast_operational(
+            {
+                "type": "NEAR_EXPIRY_WARNING",
+                "count": len(near_expiry),
+                "batches": [u.batch_number for u in near_expiry[:5]],
+                "message": (
+                    f"{len(near_expiry)} unit(s) expiring within {hours_threshold}h. "
+                    "FEFO priority elevated."
+                ),
+            }
+        )
+    return len(near_expiry)
+
+
 async def run_lifecycle_sweep() -> Dict[str, int]:
     """
     Expiry sweep on its own session, for the background task in the application
@@ -101,7 +131,13 @@ async def run_lifecycle_sweep() -> Dict[str, int]:
         async with AsyncSessionLocal() as db:
             batches = await expire_stale_units(db)
             replanned = await _replan_requests_holding_expired_units(db) if batches else 0
-            return {"expired_units": len(batches), "requests_replanned": replanned}
+            near_expiry = await check_near_expiry_units(db, hours_threshold=24)
+            return {
+                "expired_units": len(batches),
+                "requests_replanned": replanned,
+                "near_expiry_units": near_expiry,
+            }
     except Exception:
         logger.exception("Inventory lifecycle sweep failed")
-        return {"expired_units": 0, "requests_replanned": 0}
+        return {"expired_units": 0, "requests_replanned": 0, "near_expiry_units": 0}
+

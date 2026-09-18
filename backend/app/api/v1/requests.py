@@ -2,8 +2,8 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -14,14 +14,17 @@ from app.core.redis import ConcurrencyLockManager, get_redis
 from app.models.allocation import AllocationStatus
 from app.models.donor import Donor
 from app.models.hospital import Hospital
-from app.models.inventory import UnitStatus
+from app.models.inventory import InventoryUnit, UnitStatus
+
 from app.models.request import BloodRequest, RequestStatus
 from app.models.user import User
 from app.schemas.request import BloodRequestCreate, BloodRequestOut
 from app.services.allocation_service import AllocationService
 from app.services.donor_service import record_donor_outcome
 from app.services.matching_service import MatchingEngineService
+from app.services.notification_queue import NotificationQueueService
 from app.websocket.connection_manager import manager
+
 
 logger = logging.getLogger("smartblood.requests")
 
@@ -46,13 +49,22 @@ _RELOAD_OPTIONS = (
 )
 
 
-async def _load_request(db: AsyncSession, request_id: str) -> BloodRequest:
+async def _load_request(db: AsyncSession, identifier: str) -> BloodRequest:
+    """Load request by either its UUID primary key or its human-readable code (e.g. 'REQ-8492')."""
+    clean_id = identifier.strip()
     result = await db.execute(
-        select(BloodRequest).options(*_RELOAD_OPTIONS).where(BloodRequest.id == request_id)
+        select(BloodRequest)
+        .options(*_RELOAD_OPTIONS)
+        .where(
+            or_(
+                BloodRequest.id == clean_id,
+                func.upper(BloodRequest.code) == clean_id.upper(),
+            )
+        )
     )
     blood_req = result.scalars().first()
     if not blood_req:
-        raise HTTPException(status_code=404, detail="Blood request not found")
+        raise HTTPException(status_code=404, detail=f"Blood request '{identifier}' not found")
     return blood_req
 
 
@@ -143,6 +155,7 @@ async def _assert_request_access(
 @router.post("", response_model=BloodRequestOut, status_code=status.HTTP_201_CREATED)
 async def create_blood_request(
     req_in: BloodRequestCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -172,7 +185,9 @@ async def create_blood_request(
     # a pipeline error must not surface as a 500 on an already-created request.
     allocation_svc = AllocationService(db)
     try:
-        await allocation_svc.execute_allocation_pipeline(blood_req.id)
+        await allocation_svc.execute_allocation_pipeline(
+            blood_req.id, request=blood_req, hospital=hospital
+        )
     except Exception:
         logger.exception("Allocation pipeline failed for request %s", blood_req.id)
         await db.rollback()
@@ -180,36 +195,46 @@ async def create_blood_request(
         if blood_req and blood_req.status == RequestStatus.PENDING_EVALUATION:
             blood_req.status = RequestStatus.RE_PLANNING
             await db.commit()
-        await manager.broadcast_operational(
-            {
-                "type": "RE_PLANNING_TRIGGERED",
-                "request_id": blood_req.id if blood_req else None,
-                "reason": "ALLOCATION_PIPELINE_ERROR",
-                "message": (
-                    "Request recorded, but automatic sourcing failed. "
-                    "It has been queued for re-planning."
-                ),
-            }
+        manager.dispatch(
+            manager.broadcast_operational(
+                {
+                    "type": "RE_PLANNING_TRIGGERED",
+                    "request_id": blood_req.id if blood_req else None,
+                    "reason": "ALLOCATION_PIPELINE_ERROR",
+                    "message": (
+                        "Request recorded, but automatic sourcing failed. "
+                        "It has been queued for re-planning."
+                    ),
+                }
+            )
         )
+
 
     loaded_req = await _load_request(db, blood_req.id)
 
-    await manager.broadcast_operational(
-        {
-            "type": "REQUEST_CREATED",
-            "request_id": loaded_req.id,
-            "hospital_id": loaded_req.hospital_id,
-            "hospital_name": loaded_req.hospital_name,
-            "required_blood_group": loaded_req.required_blood_group,
-            "component_type": loaded_req.component_type.value,
-            "units_requested": loaded_req.units_requested,
-            "units_covered": loaded_req.units_covered,
-            "urgency_score": loaded_req.calculated_urgency_score,
-            "status": loaded_req.status.value,
-        }
+    # Offload parallel notification batch delivery to background task
+    background_tasks.add_task(NotificationQueueService.process_next_batch, 50)
+
+    manager.dispatch(
+        manager.broadcast_operational(
+            {
+                "type": "REQUEST_CREATED",
+                "request_id": loaded_req.id,
+                "hospital_id": loaded_req.hospital_id,
+                "hospital_name": loaded_req.hospital_name,
+                "required_blood_group": loaded_req.required_blood_group,
+                "component_type": loaded_req.component_type.value,
+                "units_requested": loaded_req.units_requested,
+                "units_covered": loaded_req.units_covered,
+                "urgency_score": loaded_req.calculated_urgency_score,
+                "status": loaded_req.status.value,
+            }
+        )
     )
 
+
     return BloodRequestOut.model_validate(loaded_req)
+
 
 
 @router.get("/{id}", response_model=BloodRequestOut)
@@ -264,16 +289,25 @@ async def _release_request_resources(
     End a request: release every Redis lock, return reserved stock to the shelf, mark
     the allocations as superseded, and clear donor stand-down state.
     """
+    inv_ids = [
+        alloc.inventory_unit_id
+        for alloc in blood_req.allocations
+        if alloc.status in RESERVING_ALLOCATION_STATUSES and alloc.inventory_unit_id
+    ]
+    if inv_ids:
+        await db.execute(
+            update(InventoryUnit)
+            .where(
+                InventoryUnit.id.in_(inv_ids),
+                InventoryUnit.status == UnitStatus.LOCKED_RESERVE,
+            )
+            .values(status=UnitStatus.AVAILABLE)
+        )
+
     for alloc in blood_req.allocations:
-        if alloc.status not in RESERVING_ALLOCATION_STATUSES:
-            continue
+        if alloc.status in RESERVING_ALLOCATION_STATUSES:
+            alloc.status = AllocationStatus.RE_OPTIMIZED
 
-        if alloc.inventory_unit_id:
-            unit = await db.get(alloc.inventory_unit_id)
-            if unit is not None and unit.status == UnitStatus.LOCKED_RESERVE:
-                unit.status = UnitStatus.AVAILABLE
-
-        alloc.status = AllocationStatus.RE_OPTIMIZED
 
     blood_req.status = new_status
     await db.commit()
@@ -355,24 +389,32 @@ async def fulfill_blood_request(
         )
 
     now = datetime.now(timezone.utc)
+    inv_ids = [
+        alloc.inventory_unit_id
+        for alloc in blood_req.allocations
+        if alloc.status in RESERVING_ALLOCATION_STATUSES and alloc.inventory_unit_id
+    ]
+    if inv_ids:
+        await db.execute(
+            update(InventoryUnit)
+            .where(InventoryUnit.id.in_(inv_ids))
+            .values(status=UnitStatus.DISPATCHED)
+        )
+
+    donor_ids = [
+        alloc.donor_id
+        for alloc in blood_req.allocations
+        if alloc.status in RESERVING_ALLOCATION_STATUSES and alloc.donor_id
+    ]
+    if donor_ids:
+        donors_res = await db.execute(select(Donor).where(Donor.id.in_(donor_ids)))
+        for donor in donors_res.scalars().all():
+            record_donor_outcome(donor, success=True)
+
     for alloc in blood_req.allocations:
-        if alloc.status not in RESERVING_ALLOCATION_STATUSES:
-            continue
-
-        if alloc.inventory_unit_id:
-            unit = await db.get(alloc.inventory_unit_id)
-            if unit is not None:
-                # Issued stock leaves the available pool permanently.
-                unit.status = UnitStatus.DISPATCHED
-
-        # A completed live donation advances that donor's history.
-        if alloc.donor_id:
-            donor = await db.get(Donor, alloc.donor_id)
-            if donor is not None:
-                record_donor_outcome(donor, success=True)
-
-        alloc.status = AllocationStatus.COMPLETED
-        alloc.completed_at = now
+        if alloc.status in RESERVING_ALLOCATION_STATUSES:
+            alloc.status = AllocationStatus.COMPLETED
+            alloc.completed_at = now
 
     blood_req.status = RequestStatus.FULFILLED
     await db.commit()
@@ -382,26 +424,31 @@ async def fulfill_blood_request(
     lock_mgr = ConcurrencyLockManager(redis_conn)
     await lock_mgr.release_request_locks(blood_req.id)
 
-    await manager.broadcast_operational(
-        {
-            "type": "REQUEST_FULFILLED",
-            "request_id": blood_req.id,
-            "hospital_id": blood_req.hospital_id,
-            "status": blood_req.status.value,
-            "units_covered": blood_req.units_covered,
-            "units_requested": blood_req.units_requested,
-            "message": f"Blood request {blood_req.id[:8]} successfully fulfilled.",
-        }
+    manager.dispatch(
+        manager.broadcast_operational(
+            {
+                "type": "REQUEST_FULFILLED",
+                "request_id": blood_req.id,
+                "hospital_id": blood_req.hospital_id,
+                "status": blood_req.status.value,
+                "units_covered": blood_req.units_covered,
+                "units_requested": blood_req.units_requested,
+                "message": f"Blood request {blood_req.id[:8]} successfully fulfilled.",
+            }
+        )
     )
-    await manager.broadcast_to_hospital(
-        blood_req.hospital_id,
-        {
-            "type": "REQUEST_UPDATED",
-            "request_id": blood_req.id,
-            "status": blood_req.status.value,
-            "units_covered": blood_req.units_covered,
-            "units_requested": blood_req.units_requested,
-        },
+    manager.dispatch(
+        manager.broadcast_to_hospital(
+            blood_req.hospital_id,
+            {
+                "type": "REQUEST_UPDATED",
+                "request_id": blood_req.id,
+                "status": blood_req.status.value,
+                "units_covered": blood_req.units_covered,
+                "units_requested": blood_req.units_requested,
+            },
+        )
     )
+
 
     return BloodRequestOut.model_validate(blood_req)

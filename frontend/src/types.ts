@@ -174,3 +174,11 @@ export interface WebSocketEvent {
   type: string;
   [key: string]: any;
 }
+
+export interface AdminMetrics {
+  mean_time_to_secure_seconds: number;
+  donor_acceptance_conversion_rate: number;
+  replan_rate: number;
+  total_requests_processed: number;
+  average_transit_distance_km: number;
+}

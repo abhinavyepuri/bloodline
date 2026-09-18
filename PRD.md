@@ -111,43 +111,52 @@ The following are **explicitly out of scope** for this system:
 
 ## 5. Users / Actors
 
-### 5.1 Hospital (Hospital Admin / Clinical Staff)
+### 5.1 Hospital (`role: HOSPITAL`)
 
 | Attribute | Detail |
 |:----------|:-------|
-| **Purpose** | Submit emergency blood requests on behalf of patients; track allocation progress. |
+| **Purpose** | Submit emergency blood requests on behalf of patients; track allocation progress and donor transit. |
 | **Permissions** | Create, update, cancel own requests; view allocation status and explanations for own requests; receive real-time notifications. |
-| **Main Actions** | Submit emergency blood request; cancel request; view allocation explanation; monitor live request status. |
-| **Information Visible** | Own requests and their status; matched donor or blood unit identifier (not full PII); estimated travel time; allocation rationale; notification feed. |
+| **Main Actions** | Submit emergency blood request; cancel request; view allocation explanation; monitor live request status; receive ward proximity arrival alerts. |
+| **Information Visible** | Own requests and their status; matched donor or blood unit identifier (not full PII); estimated travel time and live GPS telemetry; allocation rationale; notification feed. |
 
-### 5.2 Blood Bank (Blood Bank Staff)
+### 5.2 Blood Bank (`role: BLOOD_BANK`)
 
 | Attribute | Detail |
 |:----------|:-------|
 | **Purpose** | Maintain accurate blood unit inventory; respond to inventory locks placed by the allocation engine. |
-| **Permissions** | Add/update/mark inventory units; view own inventory and reservation locks; receive allocation notifications. |
-| **Main Actions** | Register new blood units; update unit status (quarantine, expired, dispatched); view current reservation locks. |
+| **Permissions** | Add/update/mark inventory units; view own inventory and reservation locks; receive allocation notifications; dispatch courier orders. |
+| **Main Actions** | Register new blood units; update unit status (quarantine, expired, dispatched); view current reservation locks; confirm order dispatch. |
 | **Information Visible** | Own inventory units and their statuses; reservation lock details; notification feed for lock events. |
 
-### 5.3 Verified Voluntary Donor (Donor)
+### 5.3 Verified Voluntary Donor (`role: DONOR`)
 
 | Attribute | Detail |
 |:----------|:-------|
-| **Purpose** | Register availability for emergency dispatch; respond to targeted proximity-zone broadcast alerts. |
-| **Permissions** | Toggle own availability; update own location; respond to emergency dispatch requests (accept/decline); view own dispatch history. |
-| **Main Actions** | Set availability status; update location; accept or decline an emergency dispatch alert. |
+| **Purpose** | Register availability for emergency dispatch; respond to targeted proximity-zone broadcast alerts; stream in-transit telemetry. |
+| **Permissions** | Toggle own availability; update own location; respond to emergency dispatch requests (1-tap contextual accept/decline); stream live GPS telemetry. |
+| **Main Actions** | Set availability status; update location; accept or decline an emergency dispatch alert; stream transit coordinates. |
 | **Information Visible** | Own profile; incoming dispatch alerts with hospital name, component requested, and estimated travel distance; own donation history. |
 
-### 5.4 Authorized Coordinator / System Admin
+### 5.4 Authorized Coordinator (`role: COORDINATOR`)
 
 | Attribute | Detail |
 |:----------|:-------|
-| **Purpose** | Oversee the entire coordination network; intervene manually in exceptional circumstances; manage verification and system configuration. |
-| **Permissions** | View all active requests, allocations, and audit logs; manually override allocations; manage verification status of hospitals and blood banks; adjust system parameters. |
-| **Main Actions** | Monitor live priority queue; inspect allocation explanations and audit logs; trigger manual re-planning; override allocation assignments; manage actor verification. |
+| **Purpose** | Oversee the entire coordination network; monitor city-wide queues and clinical SLAs; intervene manually in exceptional circumstances. |
+| **Permissions** | View all active requests, allocations, and audit logs; manually override allocations; trigger manual re-planning. |
+| **Main Actions** | Monitor live priority queue; inspect allocation explanations and audit logs; override allocation assignments; monitor Mean Time to Sourcing (MTTS). |
 | **Information Visible** | All active requests, allocations, donors, inventory, and audit events system-wide. |
 
-### 5.5 Patient / Patient Representative
+### 5.5 System Administrator (`role: ADMIN`)
+
+| Attribute | Detail |
+|:----------|:-------|
+| **Purpose** | Platform maintenance, security compliance, clinical metric analysis, and development environment configuration. |
+| **Permissions** | Manage verification status of hospitals, blood banks, and donors; view system-wide SLA metrics; reset demo database in development. |
+| **Main Actions** | Verify entities; inspect audit logs; analyze SLA performance metrics; manage system parameters. |
+| **Information Visible** | Complete system-wide operational, security, and audit state. |
+
+### 5.6 Patient / Patient Representative
 
 > **Implementation Decision:** In this prototype, patients themselves do not have direct system accounts. Emergency requests are submitted on their behalf by hospital staff. A `patient_id_token` field on the request record links the request to an anonymised patient identifier supplied by the hospital. This avoids collecting real patient PII in the prototype.
 
@@ -213,7 +222,7 @@ The system estimates travel time using location-based distance calculations (Pos
 
 | ID | Requirement |
 |:---|:------------|
-| FR-001 | The system shall support user registration with role selection: HOSPITAL_ADMIN, BLOOD_BANK_STAFF, DONOR, SYSTEM_ADMIN. |
+| FR-001 | The system shall support user registration with role selection: HOSPITAL, BLOOD_BANK, DONOR, COORDINATOR, ADMIN. |
 | FR-002 | The system shall authenticate users via email and password. Passwords shall be stored as bcrypt hashes. |
 | FR-003 | The system shall issue a signed JWT access token upon successful login. The token shall include the user's role. |
 | FR-004 | All protected API endpoints shall require a valid JWT in the Authorization Bearer header. |
@@ -221,7 +230,7 @@ The system estimates travel time using location-based distance calculations (Pos
 | FR-006 | Hospital staff may only view and manage their own hospital's requests. |
 | FR-007 | Blood bank staff may only view and manage their own blood bank's inventory. |
 | FR-008 | Donors may only view and manage their own donor profile and respond to their own dispatched alerts. |
-| FR-009 | SYSTEM_ADMIN role has read access to all entities and write access to verification records and system overrides. |
+| FR-009 | ADMIN and COORDINATOR roles have network-wide read access to requests and allocations; ADMIN has write access to verification records and system resets. |
 
 ### Emergency Requests
 
@@ -326,8 +335,19 @@ The system estimates travel time using location-based distance calculations (Pos
 | ID | Requirement |
 |:---|:------------|
 | FR-058 | The system shall record an immutable audit log entry for every allocation decision, re-plan, lock acquisition, lock release, and status transition. |
-| FR-059 | Audit log entries shall be retrievable by SYSTEM_ADMIN and authorized HOSPITAL_ADMIN roles (for their own requests). |
+| FR-059 | Audit log entries shall be retrievable by ADMIN, COORDINATOR, and authorized HOSPITAL roles (for their own requests). |
 | FR-060 | Audit log entries shall not be deletable via any API endpoint. |
+
+### Enterprise Concurrency, Telemetry & Background Processing
+
+| ID | Requirement |
+|:---|:------------|
+| FR-061 | Multi-unit slot claiming shall execute via a single-round-trip atomic Lua script in Redis over slots $0 \dots N-1$, guaranteeing $O(1)$ sub-millisecond execution and zero race conditions under concurrent donor responses. |
+| FR-062 | The real-time notification bus shall use a Redis Pub/Sub backplane (`smartblood:ws:events`) to broadcast WebSocket frames across multiple independent backend worker processes. |
+| FR-063 | High-latency operations (push notification queues, Dead-Letter Queues, keyspace timeout events, and T-24h near-expiry inventory sweeps) shall be handled by a dedicated background worker daemon (`app.worker`). |
+| FR-064 | In-transit traveling donors shall be able to stream live GPS coordinates via `POST /api/v1/donors/me/telemetry`; the system shall calculate dynamic PostGIS travel distance/ETA and automatically emit a high-priority `DONOR_APPROACHING_WARD` alert when the donor is within 500m of the hospital trauma center. |
+| FR-065 | Critical endpoints shall support the `Idempotency-Key` header and enforce sliding-window rate limiting (60 req/min for auth, 30 req/min for emergency dispatches). |
+| FR-066 | The system shall compute and expose clinical SLA metrics via `GET /api/v1/admin/metrics`, including Mean Time to Sourcing (MTTS in minutes), donor response conversion rates, and replan frequency. |
 
 ---
 

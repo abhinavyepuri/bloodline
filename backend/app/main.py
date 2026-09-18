@@ -10,8 +10,13 @@ from app.core.config import settings
 from app.core.database import engine, Base
 from app.core.redis import close_redis, ping_redis
 from app.core.exceptions import DomainException, domain_exception_handler
+from app.core.idempotency import IdempotencyMiddleware
+from app.core.tracing import CorrelationIdMiddleware
+from app.core.rate_limit import RateLimitMiddleware
 from app.api.v1.router import api_router
 from app.websocket.routes import router as ws_router
+from app.websocket.connection_manager import manager
+from app.services.event_sweeper import start_event_sweepers, stop_event_sweepers
 
 logger = logging.getLogger("smartblood")
 logging.basicConfig(level=logging.INFO)
@@ -74,11 +79,16 @@ async def lifespan(app: FastAPI):
         )
 
     sweep_task = asyncio.create_task(_periodic_lifecycle_sweep())
+    start_event_sweepers()
+    manager.start_pubsub_listener()
 
     yield
 
-    # Shutdown: stop the sweep, then clean up the Redis pool
+    # Shutdown: stop sweepers and clean up pools
+    manager.stop_pubsub_listener()
+    stop_event_sweepers()
     sweep_task.cancel()
+
     try:
         await sweep_task
     except (asyncio.CancelledError, Exception):
@@ -91,11 +101,33 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    docs_url=f"{settings.API_V1_STR}/docs",
-    redoc_url=f"{settings.API_V1_STR}/redoc",
+    openapi_url=f"{settings.API_V1_STR}/openapi.json" if settings.DOCS_ENABLED else None,
+    docs_url=f"{settings.API_V1_STR}/docs" if settings.DOCS_ENABLED else None,
+    redoc_url=f"{settings.API_V1_STR}/redoc" if settings.DOCS_ENABLED else None,
     lifespan=lifespan
 )
+
+# Distributed tracing: Request ID propagation for end-to-end clinical observability
+app.add_middleware(CorrelationIdMiddleware)
+
+# Network reliability: Idempotency-Key protection for mobile clients and retried mutations
+app.add_middleware(IdempotencyMiddleware)
+
+# Enterprise DDoS and brute-force protection: Redis sliding-window rate limiting
+app.add_middleware(RateLimitMiddleware)
+
+
+# Defensive security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if not settings.DEBUG:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 # CORS middleware for React Web and Android Emulator
 app.add_middleware(
@@ -143,10 +175,9 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     )
 
 
-# Include API v1 and WebSocket gateways
+# Include API v1 and WebSocket gateways (WebSocket strictly namespaced under /api/v1/realtime)
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router, prefix=f"{settings.API_V1_STR}/realtime")
-app.include_router(ws_router, prefix="")
 
 
 @app.get("/health", tags=["Health"])

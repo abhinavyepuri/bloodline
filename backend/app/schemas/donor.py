@@ -70,3 +70,30 @@ class DonorPublicOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+class DonorTelemetryIn(BaseModel):
+    latitude: float = Field(..., ge=-90.0, le=90.0, description="Current GPS latitude")
+    longitude: float = Field(..., ge=-180.0, le=180.0, description="Current GPS longitude")
+    speed_kmh: Optional[float] = Field(None, ge=0.0, description="Current movement speed in km/h")
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+
+class DonorTelemetryOut(BaseModel):
+    donor_id: str
+    latitude: float
+    longitude: float
+    active_allocation_id: Optional[str] = None
+    hospital_id: Optional[str] = None
+    hospital_name: Optional[str] = None
+    distance_to_hospital_km: Optional[float] = None
+    estimated_eta_minutes: Optional[int] = None
+    is_approaching_ward: bool = False
+    message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+

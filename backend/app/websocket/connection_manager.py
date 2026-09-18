@@ -1,27 +1,35 @@
-from typing import Dict, Iterable, List, Optional, Set
-from fastapi import WebSocket
+import asyncio
 import json
 import logging
+import uuid
+from typing import Dict, Iterable, List, Optional, Set
+from fastapi import WebSocket
+from app.core.redis import get_redis
 
 logger = logging.getLogger("smartblood.ws")
+
+REDIS_PUBSUB_CHANNEL = "smartblood:ws:events"
 
 
 class ConnectionManager:
     """
-    Manages active WebSockets and multiplexes real-time event updates.
+    Manages active WebSockets and multiplexes real-time event updates across
+    single-process or horizontally scaled multi-worker Uvicorn architectures.
 
-    Sockets register on named *channels* resolved from the authenticated user at
-    connect time (role, and the id of the entity they own). Broadcasts target a
-    channel instead of fanning every event out to every client, so a donor only
-    receives alerts meant for them and a hospital only sees its own traffic.
-
-    ``broadcast`` remains available for genuine system-wide events.
+    Sockets register on named channels resolved from the authenticated user
+    (role, entity_id, user_id).
+    Outgoing events are delivered immediately to local subscribers and simultaneously
+    published to a Redis Pub/Sub backplane so connected WebSockets on other worker
+    processes or cluster nodes receive the update in real-time.
     """
 
     def __init__(self) -> None:
+        self.worker_id: str = uuid.uuid4().hex[:8]
         self.active_connections: List[WebSocket] = []
         self.subscriptions: Dict[str, Set[WebSocket]] = {}
         self._socket_channels: Dict[WebSocket, Set[str]] = {}
+        self._pubsub_task: Optional[asyncio.Task] = None
+        self._is_listening: bool = False
 
     # ------------------------------------------------------------ lifecycle
     async def connect(
@@ -57,17 +65,28 @@ class ConnectionManager:
                 self.subscriptions.pop(channel, None)
 
     # --------------------------------------------------------------- send
+    async def _send_single(self, socket: WebSocket, payload: str, dead: List[WebSocket]) -> None:
+        try:
+            await socket.send_text(payload)
+        except Exception:
+            dead.append(socket)
+
     async def _send(self, sockets: Iterable[WebSocket], message: dict) -> None:
+        socket_list = list(sockets)
+        if not socket_list:
+            return
         payload = json.dumps(message, default=str)
         dead: List[WebSocket] = []
-        for socket in list(sockets):
-            try:
-                await socket.send_text(payload)
-            except Exception:
-                # Socket is gone: reap it rather than leaking it forever.
-                dead.append(socket)
+        await asyncio.gather(
+            *(self._send_single(s, payload, dead) for s in socket_list),
+            return_exceptions=True,
+        )
         for socket in dead:
             self.disconnect(socket)
+
+    def dispatch(self, coroutine) -> asyncio.Task:
+        """Fire-and-forget background broadcast that never blocks the HTTP response."""
+        return asyncio.create_task(coroutine)
 
     async def _send_to_channel(self, channel: str, message: dict) -> None:
         subscribers = self.subscriptions.get(channel)
@@ -81,37 +100,110 @@ class ConnectionManager:
         if seen:
             await self._send(seen, message)
 
+    # ------------------------------------------------ Redis Pub/Sub Backplane
+    async def _publish_to_backplane(self, channels: Optional[Iterable[str]], message: dict) -> None:
+        """
+        1. Delivers immediately to local WebSockets on this worker.
+        2. Publishes to Redis Pub/Sub channel so peer workers deliver to their local clients.
+        """
+        # Step 1: Local delivery
+        if channels is None:
+            await self._send(self.active_connections, message)
+        else:
+            await self._send_to_channels(channels, message)
+
+        # Step 2: Cross-worker Redis Pub/Sub broadcast
+        try:
+            redis_client = await get_redis()
+            envelope = {
+                "origin_worker_id": self.worker_id,
+                "channels": list(channels) if channels else None,
+                "message": message,
+            }
+            await redis_client.publish(REDIS_PUBSUB_CHANNEL, json.dumps(envelope, default=str))
+        except Exception as e:
+            logger.debug(f"[WS Backplane] Redis publish omitted/failed ({e})")
+
+    async def _pubsub_listener_loop(self) -> None:
+        """Background listener receiving broadcasts from peer workers via Redis."""
+        while self._is_listening:
+            try:
+                redis_client = await get_redis()
+                pubsub = redis_client.pubsub()
+                await pubsub.subscribe(REDIS_PUBSUB_CHANNEL)
+                logger.info(
+                    f"[WS Backplane] Subscribed to Redis channel '{REDIS_PUBSUB_CHANNEL}' (worker {self.worker_id})"
+                )
+
+                async for raw in pubsub.listen():
+                    if not self._is_listening:
+                        break
+                    if raw and raw.get("type") == "message":
+                        data_str = raw.get("data")
+                        if isinstance(data_str, bytes):
+                            data_str = data_str.decode("utf-8")
+                        if not isinstance(data_str, str):
+                            continue
+                        try:
+                            envelope = json.loads(data_str)
+                            # Ignore reflection of messages originated on this worker
+                            if envelope.get("origin_worker_id") == self.worker_id:
+                                continue
+                            channels = envelope.get("channels")
+                            msg = envelope.get("message")
+                            if channels is None:
+                                await self._send(self.active_connections, msg)
+                            else:
+                                await self._send_to_channels(channels, msg)
+                        except Exception as parse_err:
+                            logger.error(f"[WS Backplane] Error unpacking backplane message: {parse_err}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if self._is_listening:
+                    logger.debug(f"[WS Backplane] Listener error ({e}), retrying in 5s...")
+                    await asyncio.sleep(5)
+
+    def start_pubsub_listener(self) -> None:
+        if self._pubsub_task is None or self._pubsub_task.done():
+            self._is_listening = True
+            self._pubsub_task = asyncio.create_task(self._pubsub_listener_loop())
+
+    def stop_pubsub_listener(self) -> None:
+        self._is_listening = False
+        if self._pubsub_task and not self._pubsub_task.done():
+            self._pubsub_task.cancel()
+
     # ---------------------------------------------------------- broadcasts
     async def broadcast(self, message: dict) -> None:
-        """System-wide event: every connected client."""
-        await self._send(self.active_connections, message)
+        """System-wide event: every connected client across all cluster nodes."""
+        await self._publish_to_backplane(None, message)
 
     async def broadcast_to_role(self, role: str, message: dict) -> None:
-        await self._send_to_channel(f"role:{role.strip().upper()}", message)
+        await self._publish_to_backplane([f"role:{role.strip().upper()}"], message)
 
     async def broadcast_to_donors(self, donor_ids: Iterable[str], message: dict) -> None:
-        """Target specific donors by their Donor id. Empty id list is a no-op."""
+        """Target specific donors by their Donor id across all cluster nodes."""
         channels = [f"entity:{d}" for d in donor_ids if d]
         if channels:
-            await self._send_to_channels(channels, message)
+            await self._publish_to_backplane(channels, message)
 
     async def broadcast_to_hospital(self, hospital_id: Optional[str], message: dict) -> None:
         if hospital_id:
-            await self._send_to_channel(f"entity:{hospital_id}", message)
+            await self._publish_to_backplane([f"entity:{hospital_id}"], message)
 
     async def broadcast_to_blood_banks(self, message: dict) -> None:
-        await self._send_to_channel("role:BLOOD_BANK", message)
+        await self._publish_to_backplane(["role:BLOOD_BANK"], message)
 
     async def broadcast_to_coordinators(self, message: dict) -> None:
-        await self._send_to_channels(["role:COORDINATOR", "role:ADMIN"], message)
+        await self._publish_to_backplane(["role:COORDINATOR", "role:ADMIN"], message)
 
     async def broadcast_operational(self, message: dict) -> None:
         """
-        Operational event for the staff dashboards (hospitals, blood banks,
-        coordinators, admins) — excludes donors, who should only see alerts
-        targeted at them.
+        Operational event for staff dashboards (hospitals, blood banks, coordinators, admins)
+        delivered across all cluster worker instances.
         """
-        await self._send_to_channels(
+        await self._publish_to_backplane(
             ["role:HOSPITAL", "role:BLOOD_BANK", "role:COORDINATOR", "role:ADMIN"],
             message,
         )

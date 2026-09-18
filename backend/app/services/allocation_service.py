@@ -31,6 +31,7 @@ from app.services.donor_service import (
     record_donor_outcome,
 )
 from app.services.matching_service import MatchingEngineService
+from app.services.notification_queue import NotificationQueueService
 from app.websocket.connection_manager import manager
 
 # Assumed road speed for ETA estimation, and cold-chain packing/handover allowance.
@@ -58,6 +59,17 @@ class AllocationService:
         self.inventory_repo = InventoryRepository(db)
 
     # ------------------------------------------------------------- helpers
+    async def _get_request(self, identifier: str) -> Optional[BloodRequest]:
+        """Fetch BloodRequest by primary key UUID or short code (e.g. 'REQ-8492')."""
+        clean_id = identifier.strip()
+        req = await self.db.get(BloodRequest, clean_id)
+        if req is not None:
+            return req
+        res = await self.db.execute(
+            select(BloodRequest).where(func.upper(BloodRequest.code) == clean_id.upper())
+        )
+        return res.scalars().first()
+
     async def covered_unit_count(self, request_id: str) -> int:
         """Number of units currently secured for a request (inventory + donors)."""
         res = await self.db.execute(
@@ -138,7 +150,11 @@ class AllocationService:
 
     # ------------------------------------------------------------ pipeline
     async def execute_allocation_pipeline(
-        self, request_id: str, radius_km: Optional[float] = None
+        self,
+        request_id: str,
+        radius_km: Optional[float] = None,
+        request: Optional[BloodRequest] = None,
+        hospital: Optional[Hospital] = None,
     ) -> Dict[str, Any]:
         """
         Execute the multi-tier allocation pipeline:
@@ -153,11 +169,14 @@ class AllocationService:
         redis_conn = await get_redis()
         lock_mgr = ConcurrencyLockManager(redis_conn)
 
-        request = await self.db.get(BloodRequest, request_id)
         if not request:
-            raise DomainException(f"Blood request {request_id} not found", 404)
+            request = await self._get_request(request_id)
+        if not request:
+            raise DomainException(f"Blood request '{request_id}' not found", 404)
 
-        hospital = await self.db.get(Hospital, request.hospital_id)
+        if not hospital and request.hospital_id:
+            hospital = await self.db.get(Hospital, request.hospital_id)
+
 
         units_requested = request.units_requested
         candidate_scores: Dict[str, Any] = {}
@@ -226,34 +245,39 @@ class AllocationService:
             )
             await self.db.commit()
 
-            await manager.broadcast_operational(
-                {
-                    "type": "INVENTORY_LOCKED",
-                    "request_id": request.id,
-                    "hospital_id": hospital.id if hospital else None,
-                    "units_count": covered,
-                    "units_requested": units_requested,
-                    "batches": batches,
-                    "status": request.status.value,
-                    "eta_minutes": estimate_eta_minutes(
-                        candidate_scores[batches[0]]["distance_km"], INVENTORY_PREPARATION_MINUTES
-                    )
-                    if batches
-                    else None,
-                    "message": f"{covered} unit(s) reserved from blood bank storage.",
-                }
+            manager.dispatch(
+                manager.broadcast_operational(
+                    {
+                        "type": "INVENTORY_LOCKED",
+                        "request_id": request.id,
+                        "hospital_id": hospital.id if hospital else None,
+                        "units_count": covered,
+                        "units_requested": units_requested,
+                        "batches": batches,
+                        "status": request.status.value,
+                        "eta_minutes": estimate_eta_minutes(
+                            candidate_scores[batches[0]]["distance_km"], INVENTORY_PREPARATION_MINUTES
+                        )
+                        if batches
+                        else None,
+                        "message": f"{covered} unit(s) reserved from blood bank storage.",
+                    }
+                )
             )
-            await manager.broadcast_to_hospital(
-                request.hospital_id,
-                {
-                    "type": "REQUEST_UPDATED",
-                    "request_id": request.id,
-                    "status": request.status.value,
-                    "units_covered": covered,
-                    "units_requested": units_requested,
-                    "calculated_urgency_score": request.calculated_urgency_score,
-                },
+            manager.dispatch(
+                manager.broadcast_to_hospital(
+                    request.hospital_id,
+                    {
+                        "type": "REQUEST_UPDATED",
+                        "request_id": request.id,
+                        "status": request.status.value,
+                        "units_covered": covered,
+                        "units_requested": units_requested,
+                        "calculated_urgency_score": request.calculated_urgency_score,
+                    },
+                )
             )
+
 
             return {
                 "strategy": "INVENTORY",
@@ -360,52 +384,77 @@ class AllocationService:
         )
         await self.db.commit()
 
-        await manager.broadcast_to_donors(
-            donor_ids,
-            {
-                "type": "EMERGENCY_DISPATCH_ALERT",
-                "request_id": request.id,
-                "hospital_name": hospital.name if hospital else "Emergency Medical Center",
-                "hospital_id": hospital.id if hospital else None,
-                "required_blood_group": request.required_blood_group,
-                "component_type": request.component_type.value,
-                "urgency_score": request.calculated_urgency_score,
-                "triage_level": request.triage_level.value,
-                "units_needed": shortfall,
-                "units_requested": units_requested,
-                "units_covered": covered,
-                "ttl_seconds": settings.DONOR_RESPONSE_TTL_SECONDS,
-                "donor_ids": donor_ids,
-                "message": (
-                    f"Emergency: {shortfall} bag(s) of {request.required_blood_group} blood needed "
-                    f"urgently by the hospital. Please tap Accept if you can help!"
-                ),
-            },
+        manager.dispatch(
+            manager.broadcast_to_donors(
+                donor_ids,
+                {
+                    "type": "EMERGENCY_DISPATCH_ALERT",
+                    "request_id": request.id,
+                    "hospital_name": hospital.name if hospital else "Emergency Medical Center",
+                    "hospital_id": hospital.id if hospital else None,
+                    "required_blood_group": request.required_blood_group,
+                    "component_type": request.component_type.value,
+                    "urgency_score": request.calculated_urgency_score,
+                    "triage_level": request.triage_level.value,
+                    "units_needed": shortfall,
+                    "units_requested": units_requested,
+                    "units_covered": covered,
+                    "ttl_seconds": settings.DONOR_RESPONSE_TTL_SECONDS,
+                    "donor_ids": donor_ids,
+                    "message": (
+                        f"Emergency: {shortfall} bag(s) of {request.required_blood_group} blood needed "
+                        f"urgently by the hospital. Please tap Accept if you can help!"
+                    ),
+                },
+            )
         )
-        await manager.broadcast_to_hospital(
-            request.hospital_id,
-            {
-                "type": "REQUEST_UPDATED",
-                "request_id": request.id,
-                "status": request.status.value,
-                "units_covered": covered,
-                "units_requested": units_requested,
-                "calculated_urgency_score": request.calculated_urgency_score,
-            },
+        manager.dispatch(
+            manager.broadcast_to_hospital(
+                request.hospital_id,
+                {
+                    "type": "REQUEST_UPDATED",
+                    "request_id": request.id,
+                    "status": request.status.value,
+                    "units_covered": covered,
+                    "units_requested": units_requested,
+                    "calculated_urgency_score": request.calculated_urgency_score,
+                },
+            )
         )
-        await manager.broadcast_operational(
-            {
-                "type": "EMERGENCY_BROADCAST_SENT",
-                "request_id": request.id,
-                "hospital_name": hospital.name if hospital else "Emergency Medical Center",
-                "units_needed": shortfall,
-                "donor_count": len(donors),
-                "radius_km": radius_used,
-                "message": (
-                    f"Blood bank stock covered {covered} of {units_requested} unit(s). "
-                    f"Alerting {len(donors)} nearby volunteer donors for the rest."
-                ),
-            }
+        manager.dispatch(
+            manager.broadcast_operational(
+                {
+                    "type": "EMERGENCY_BROADCAST_SENT",
+                    "request_id": request.id,
+                    "hospital_name": hospital.name if hospital else "Emergency Medical Center",
+                    "units_needed": shortfall,
+                    "donor_count": len(donors),
+                    "radius_km": radius_used,
+                    "message": (
+                        f"Blood bank stock covered {covered} of {units_requested} unit(s). "
+                        f"Alerting {len(donors)} nearby volunteer donors for the rest."
+                    ),
+                }
+            )
+        )
+
+
+        # Schedule the 180s countdown and enqueue parallel background push notifications
+        await lock_mgr.schedule_alert_timeout(request.id, timeout_seconds=settings.DONOR_RESPONSE_TTL_SECONDS)
+        deadline_mins = 60
+        if request.deadline_at:
+            now_dt = datetime.now(timezone.utc)
+            req_dl = request.deadline_at if request.deadline_at.tzinfo else request.deadline_at.replace(tzinfo=timezone.utc)
+            deadline_mins = max(1, int((req_dl - now_dt).total_seconds() / 60))
+        await NotificationQueueService.enqueue_donor_alert(
+            donor_ids=donor_ids,
+            request_id=request.id,
+            request_code=request.code,
+            blood_group=request.required_blood_group,
+            urgency_score=request.calculated_urgency_score,
+            deadline_minutes=deadline_mins,
+            hospital_name=hospital.name if hospital else "Emergency Medical Center",
+            distance_km_map={donor.id: round(dist, 2) for donor, dist in donors},
         )
 
         return {
@@ -416,6 +465,8 @@ class AllocationService:
             "radius_km": radius_used,
             "donor_ids": donor_ids,
         }
+
+
 
     # ---------------------------------------------------- donor response
     async def process_donor_response(
@@ -431,9 +482,10 @@ class AllocationService:
         redis_conn = await get_redis()
         lock_mgr = ConcurrencyLockManager(redis_conn)
 
-        request = await self.db.get(BloodRequest, request_id)
+        request = await self._get_request(request_id)
         if not request:
-            raise DomainException(f"Blood request {request_id} not found", 404)
+            raise DomainException(f"Blood request '{request_id}' not found", 404)
+        canonical_id = request.id
 
         if request.status not in (
             RequestStatus.PENDING_EVALUATION,
@@ -455,9 +507,9 @@ class AllocationService:
         # filters were applied when it was built, so accepting outside it would bypass
         # them. An empty zone means either the response window lapsed or the request
         # never reached the donor, and those are worth telling apart.
-        alert_zone = await lock_mgr.get_alerted_donors(request_id)
+        alert_zone = await lock_mgr.get_alerted_donors(canonical_id)
         if donor_id not in alert_zone:
-            if await lock_mgr.alert_zone_ttl(request_id) is None:
+            if await lock_mgr.alert_zone_ttl(canonical_id) is None:
                 raise DomainException(
                     "The response window for this request has closed.", 409
                 )
@@ -466,14 +518,15 @@ class AllocationService:
             )
 
         if action.upper() == "DECLINE":
-            await lock_mgr.remove_alerted_donor(request_id, donor_id)
+            await lock_mgr.remove_alerted_donor(canonical_id, donor_id)
             record_donor_outcome(donor, success=False)
             await self.db.commit()
 
             await manager.broadcast_operational(
                 {
                     "type": "DONOR_DECLINED",
-                    "request_id": request_id,
+                    "request_id": canonical_id,
+                    "request_code": request.code,
                     "donor_id": donor_id,
                     "message": (
                         "A volunteer declined. Other nearby donors are still being asked."
@@ -494,7 +547,7 @@ class AllocationService:
             )
 
         # Idempotent: a donor who already holds a slot is not given a second one.
-        existing_slot = await lock_mgr.donor_slot(request_id, donor_id, request.units_requested)
+        existing_slot = await lock_mgr.donor_slot(canonical_id, donor_id, request.units_requested)
         if existing_slot is not None:
             return {
                 "status": "ALREADY_CLAIMED",
@@ -502,132 +555,153 @@ class AllocationService:
                 "slot": existing_slot,
             }
 
-        slot = await lock_mgr.claim_unit_slot(request_id, donor_id, request.units_requested)
+        slot = await lock_mgr.claim_unit_slot(canonical_id, donor_id, request.units_requested)
         if slot is None:
             # Every unit slot is taken by other donors.
-            raise AllocationRaceConditionError(request_id)
+            raise AllocationRaceConditionError(canonical_id)
 
-        hospital = await self.db.get(Hospital, request.hospital_id)
-        distance_km = self._donor_distance_km(donor, hospital)
-        eta_minutes = estimate_eta_minutes(distance_km, DONOR_PREPARATION_MINUTES)
+        try:
+            hospital = await self.db.get(Hospital, request.hospital_id)
+            distance_km = self._donor_distance_km(donor, hospital)
+            eta_minutes = estimate_eta_minutes(distance_km, DONOR_PREPARATION_MINUTES)
 
-        allocation = Allocation(
-            request_id=request_id,
-            source_type=AllocationSourceType.LIVE_DONOR,
-            donor_id=donor_id,
-            status=AllocationStatus.HARD_LOCKED,
-            distance_km=distance_km,
-            estimated_transit_minutes=eta_minutes,
-            allocated_at=datetime.now(timezone.utc),
-        )
-        self.db.add(allocation)
-        await self.db.flush()
+            allocation = Allocation(
+                request_id=canonical_id,
+                source_type=AllocationSourceType.LIVE_DONOR,
+                donor_id=donor_id,
+                status=AllocationStatus.HARD_LOCKED,
+                distance_km=distance_km,
+                estimated_transit_minutes=eta_minutes,
+                allocated_at=datetime.now(timezone.utc),
+            )
+            self.db.add(allocation)
+            await self.db.flush()
 
-        covered = await self.covered_unit_count(request_id)
-        remaining = request.units_requested - covered
-        fully_covered = remaining <= 0
+            covered = await self.covered_unit_count(canonical_id)
+            remaining = request.units_requested - covered
+            fully_covered = remaining <= 0
 
-        request.status = (
-            RequestStatus.COMMITTED_IN_TRANSIT
-            if fully_covered
-            else RequestStatus.PROXIMITY_ZONE_NOTIFIED
-        )
+            request.status = (
+                RequestStatus.COMMITTED_IN_TRANSIT
+                if fully_covered
+                else RequestStatus.PROXIMITY_ZONE_NOTIFIED
+            )
 
-        self.db.add(
-            AllocationAuditLog(
-                request_id=request_id,
-                decision_type="DONOR_UNIT_CLAIM",
-                urgency_score=request.calculated_urgency_score,
-                candidate_scores_json={
-                    "claimed_by_donor": donor_id,
-                    "slot_index": slot,
+            self.db.add(
+                AllocationAuditLog(
+                    request_id=canonical_id,
+                    decision_type="DONOR_UNIT_CLAIM",
+                    urgency_score=request.calculated_urgency_score,
+                    candidate_scores_json={
+                        "claimed_by_donor": donor_id,
+                        "slot_index": slot,
+                        "distance_km": distance_km,
+                        "eta_minutes": eta_minutes,
+                        "units_covered": covered,
+                        "units_requested": request.units_requested,
+                    },
+                    selected_resource_id=donor_id,
+                    rationale_summary=(
+                        f"Donor {donor_id[:8]}... claimed unit slot {slot + 1} of "
+                        f"{request.units_requested} ({distance_km}km, ETA ~{eta_minutes}min). "
+                        f"{covered}/{request.units_requested} unit(s) now covered."
+                    ),
+                )
+            )
+            await self.db.commit()
+        except Exception:
+            # Clean up claimed slot from Redis to prevent lock leaking on unexpected DB errors
+            await lock_mgr.release_donor_slot(canonical_id, donor_id, request.units_requested)
+            raise
+
+        manager.dispatch(
+            manager.broadcast_to_donors(
+                [donor_id],
+                {
+                    "type": "DONOR_CLAIM_SUCCESS",
+                    "request_id": canonical_id,
+                    "request_code": request.code,
+                    "donor_id": donor_id,
                     "distance_km": distance_km,
                     "eta_minutes": eta_minutes,
                     "units_covered": covered,
                     "units_requested": request.units_requested,
+                    "status": request.status.value,
+                    "message": (
+                        "Your offer to donate is confirmed. Please head toward the hospital."
+                    ),
                 },
-                selected_resource_id=donor_id,
-                rationale_summary=(
-                    f"Donor {donor_id[:8]}... claimed unit slot {slot + 1} of "
-                    f"{request.units_requested} ({distance_km}km, ETA ~{eta_minutes}min). "
-                    f"{covered}/{request.units_requested} unit(s) now covered."
-                ),
             )
         )
-        await self.db.commit()
-
-        await manager.broadcast_to_donors(
-            [donor_id],
-            {
-                "type": "DONOR_CLAIM_SUCCESS",
-                "request_id": request_id,
-                "donor_id": donor_id,
-                "distance_km": distance_km,
-                "eta_minutes": eta_minutes,
-                "units_covered": covered,
-                "units_requested": request.units_requested,
-                "status": request.status.value,
-                "message": (
-                    "Your offer to donate is confirmed. Please head toward the hospital."
-                ),
-            },
+        manager.dispatch(
+            manager.broadcast_operational(
+                {
+                    "type": "DONOR_CLAIM_SUCCESS",
+                    "request_id": canonical_id,
+                    "request_code": request.code,
+                    "donor_id": donor_id,
+                    "distance_km": distance_km,
+                    "eta_minutes": eta_minutes,
+                    "units_covered": covered,
+                    "units_requested": request.units_requested,
+                    "status": request.status.value,
+                    "message": "Nearby volunteer donor agreed to donate.",
+                }
+            )
         )
-        await manager.broadcast_operational(
-            {
-                "type": "DONOR_CLAIM_SUCCESS",
-                "request_id": request_id,
-                "donor_id": donor_id,
-                "distance_km": distance_km,
-                "eta_minutes": eta_minutes,
-                "units_covered": covered,
-                "units_requested": request.units_requested,
-                "status": request.status.value,
-                "message": "Nearby volunteer donor agreed to donate.",
-            }
-        )
-        await manager.broadcast_to_hospital(
-            request.hospital_id,
-            {
-                "type": "REQUEST_UPDATED",
-                "request_id": request_id,
-                "status": request.status.value,
-                "units_covered": covered,
-                "units_requested": request.units_requested,
-                "calculated_urgency_score": request.calculated_urgency_score,
-            },
+        manager.dispatch(
+            manager.broadcast_to_hospital(
+                request.hospital_id,
+                {
+                    "type": "REQUEST_UPDATED",
+                    "request_id": canonical_id,
+                    "request_code": request.code,
+                    "status": request.status.value,
+                    "units_covered": covered,
+                    "units_requested": request.units_requested,
+                    "calculated_urgency_score": request.calculated_urgency_score,
+                },
+            )
         )
 
         if fully_covered:
             # Stand down only the donors alerted for THIS request, then drop its locks.
             stood_down = sorted(alert_zone - {donor_id})
             if stood_down:
-                await manager.broadcast_to_donors(
-                    stood_down,
+                manager.dispatch(
+                    manager.broadcast_to_donors(
+                        stood_down,
+                        {
+                            "type": "DONOR_STAND_DOWN",
+                            "request_id": canonical_id,
+                            "request_code": request.code,
+                            "exempt_donor_id": donor_id,
+                            "message": (
+                                "This emergency has enough donors now. Thank you for your readiness."
+                            ),
+                        },
+                    )
+                )
+            await lock_mgr.release_request_locks(canonical_id)
+        else:
+            manager.dispatch(
+                manager.broadcast_to_donors(
+                    [donor_id],
                     {
-                        "type": "DONOR_STAND_DOWN",
-                        "request_id": request_id,
-                        "exempt_donor_id": donor_id,
+                        "type": "UNITS_STILL_NEEDED",
+                        "request_id": canonical_id,
+                        "request_code": request.code,
+                        "units_covered": covered,
+                        "units_requested": request.units_requested,
+                        "shortfall": remaining,
                         "message": (
-                            "This emergency has enough donors now. Thank you for your readiness."
+                            f"{covered} of {request.units_requested} unit(s) covered. "
+                            f"Still coordinating the remaining {remaining}."
                         ),
                     },
                 )
-            await lock_mgr.release_request_locks(request_id)
-        else:
-            await manager.broadcast_to_donors(
-                [donor_id],
-                {
-                    "type": "UNITS_STILL_NEEDED",
-                    "request_id": request_id,
-                    "units_covered": covered,
-                    "units_requested": request.units_requested,
-                    "shortfall": remaining,
-                    "message": (
-                        f"{covered} of {request.units_requested} unit(s) covered. "
-                        f"Still coordinating the remaining {remaining}."
-                    ),
-                },
             )
+
 
         return {
             "status": "HARD_LOCKED_COMMITTED",
@@ -657,13 +731,14 @@ class AllocationService:
         redis_conn = await get_redis()
         lock_mgr = ConcurrencyLockManager(redis_conn)
 
-        request = await self.db.get(BloodRequest, request_id)
+        request = await self._get_request(request_id)
         if not request:
-            raise DomainException(f"Blood request {request_id} not found", 404)
+            raise DomainException(f"Blood request '{request_id}' not found", 404)
+        canonical_id = request.id
 
         hospital = await self.db.get(Hospital, request.hospital_id)
 
-        retained = await self.covered_unit_count(request_id)
+        retained = await self.covered_unit_count(canonical_id)
         shortfall = request.units_requested - retained
 
         request.status = (
@@ -857,6 +932,23 @@ class AllocationService:
                 },
             )
 
+            # Schedule 180s timeout and enqueue background notifications
+            await lock_mgr.schedule_alert_timeout(request.id, timeout_seconds=settings.DONOR_RESPONSE_TTL_SECONDS)
+            deadline_mins = 60
+            if request.deadline_at:
+                now_dt = datetime.now(timezone.utc)
+                deadline_mins = max(1, int((request.deadline_at.replace(tzinfo=timezone.utc) if request.deadline_at.tzinfo is None else request.deadline_at - now_dt).total_seconds() / 60))
+            await NotificationQueueService.enqueue_donor_alert(
+                donor_ids=donor_ids,
+                request_id=request.id,
+                request_code=request.code,
+                blood_group=request.required_blood_group,
+                urgency_score=request.calculated_urgency_score,
+                deadline_minutes=deadline_mins,
+                hospital_name=hospital.name if hospital else "Emergency Medical Center",
+                distance_km_map={donor.id: round(dist, 2) for donor, dist in donors},
+            )
+
             return {
                 "status": "DONOR_REPLAN_BROADCAST",
                 "retained": retained,
@@ -864,6 +956,7 @@ class AllocationService:
                 "donor_count": len(donors),
                 "radius_km": radius_used,
             }
+
 
         # 3. Nothing left to try.
         request.status = RequestStatus.RE_PLANNING
@@ -883,5 +976,166 @@ class AllocationService:
         return {
             "status": "NO_RESOURCES_AVAILABLE",
             "retained": retained,
+            "shortfall": shortfall,
+        }
+
+    # ---------------------------------------------------- cancellation & timeout
+    async def cancel_donor_allocation(
+        self, request_id: str, donor_id: str, reason: str = "DONOR_CANCELLED"
+    ) -> Dict[str, Any]:
+        """
+        Process a donor cancelling their previously accepted allocation.
+        Releases their hard lock slot, marks allocation as CANCELLED_BY_DONOR,
+        updates donor outcome stats, and triggers dynamic re-planning.
+        """
+        redis_conn = await get_redis()
+        lock_mgr = ConcurrencyLockManager(redis_conn)
+
+        request = await self._get_request(request_id)
+        if not request:
+            raise DomainException(f"Blood request '{request_id}' not found", 404)
+        canonical_id = request.id
+
+        alloc_res = await self.db.execute(
+            select(Allocation).where(
+                and_(
+                    Allocation.request_id == canonical_id,
+                    Allocation.donor_id == donor_id,
+                    Allocation.status.in_(COVERING_ALLOCATION_STATUSES),
+                )
+            )
+        )
+        allocation = alloc_res.scalars().first()
+        if not allocation:
+            raise DomainException(
+                f"No active allocation found for donor {donor_id} on request {request_id}",
+                404,
+            )
+
+        allocation.status = AllocationStatus.CANCELLED_BY_DONOR
+        donor = await self.db.get(Donor, donor_id)
+        if donor:
+            record_donor_outcome(donor, success=False)
+
+        await self.db.commit()
+
+        # Release the donor's slot in Redis
+        await lock_mgr.release_donor_slot(canonical_id, donor_id, request.units_requested)
+
+        # Trigger automatic re-planning to source a replacement
+        replan_res = await self.replan_request(
+            request_id=canonical_id,
+            trigger_reason=f"Committed donor {donor_id[:8]} cancelled: {reason}",
+        )
+
+        await manager.broadcast_operational(
+            {
+                "type": "DONOR_ALLOCATION_CANCELLED",
+                "request_id": canonical_id,
+                "request_code": request.code,
+                "donor_id": donor_id,
+                "reason": reason,
+                "replan_status": replan_res.get("status"),
+            }
+        )
+
+        return {
+            "status": "DONOR_ALLOCATION_CANCELLED",
+            "request_id": canonical_id,
+            "request_code": request.code,
+            "donor_id": donor_id,
+            "replan_result": replan_res,
+        }
+
+    async def handle_allocation_timeout(self, request_id: str) -> Dict[str, Any]:
+        """
+        Handle expiration of donor response window. If shortfall remains, escalate
+        to expanded geofence or flag request for coordinator re-planning.
+        """
+        redis_conn = await get_redis()
+        lock_mgr = ConcurrencyLockManager(redis_conn)
+
+        request = await self._get_request(request_id)
+        if not request:
+            raise DomainException(f"Blood request '{request_id}' not found", 404)
+        canonical_id = request.id
+
+        if request.status not in (
+            RequestStatus.PROXIMITY_ZONE_NOTIFIED,
+            RequestStatus.RE_PLANNING,
+            RequestStatus.PENDING_EVALUATION,
+        ):
+            return {
+                "status": "NOOP",
+                "request_status": request.status.value,
+                "message": f"Request {request_id} is in status {request.status.value}, no timeout action needed.",
+            }
+
+        covered = await self.covered_unit_count(canonical_id)
+        shortfall = request.units_requested - covered
+
+        if shortfall <= 0:
+            request.status = RequestStatus.COMMITTED_IN_TRANSIT
+            await self.db.commit()
+            await lock_mgr.release_request_locks(canonical_id)
+            return {
+                "status": "ALREADY_SATISFIED",
+                "covered": covered,
+                "shortfall": 0,
+            }
+
+        # Expand geofence search or trigger replan
+        hospital = await self.db.get(Hospital, request.hospital_id)
+        donors, radius_used = await self._alert_proximity_donors_staged(
+            request, hospital, lock_mgr, radius_km=settings.EXPANDED_GEOFENCE_RADIUS_KM
+        )
+
+        if donors:
+            request.status = RequestStatus.PROXIMITY_ZONE_NOTIFIED
+            self.db.add(
+                AllocationAuditLog(
+                    request_id=request.id,
+                    decision_type="TIMEOUT_GEOFENCE_EXPANSION",
+                    urgency_score=request.calculated_urgency_score,
+                    candidate_scores_json={
+                        "shortfall": shortfall,
+                        "covered": covered,
+                        "expanded_donor_count": len(donors),
+                        "radius_km": radius_used,
+                    },
+                    selected_resource_id=f"timeout-expanded-{len(donors)}",
+                    rationale_summary=(
+                        f"Alert window lapsed with {covered}/{request.units_requested} unit(s) covered. "
+                        f"Expanded geofence to {radius_used}km alerting {len(donors)} donors."
+                    ),
+                )
+            )
+            await self.db.commit()
+            return {
+                "status": "EXPANDED_ALERT_ZONE",
+                "covered": covered,
+                "shortfall": shortfall,
+                "donors_alerted": len(donors),
+                "radius_km": radius_used,
+            }
+
+        # Otherwise mark for operational replanning
+        request.status = RequestStatus.RE_PLANNING
+        await self.db.commit()
+
+        await manager.broadcast_operational(
+            {
+                "type": "ALLOCATION_TIMED_OUT",
+                "request_id": request_id,
+                "covered": covered,
+                "shortfall": shortfall,
+                "status": request.status.value,
+                "message": f"Alert window lapsed for request {request_id[:8]}. Shortfall: {shortfall} unit(s).",
+            }
+        )
+
+        return {
+            "status": "TIMEOUT_REPLANNING",
+            "covered": covered,
             "shortfall": shortfall,
         }

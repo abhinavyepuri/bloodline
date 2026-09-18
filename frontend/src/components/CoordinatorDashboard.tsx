@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useWebSocket } from '../context/WebSocketContext';
 import { api, loginRequest } from '../lib/api';
-import { BloodRequest, HospitalDirectoryEntry, AllocationAuditLog, InventoryUnit } from '../types';
-import { Radio, Play, RotateCcw, Activity, Zap, Info, X } from 'lucide-react';
+import { BloodRequest, HospitalDirectoryEntry, AllocationAuditLog, InventoryUnit, AdminMetrics } from '../types';
+import { Radio, Play, RotateCcw, Activity, Zap, Info, X, BarChart3, FileText, SlidersHorizontal, CheckCircle2 } from 'lucide-react';
 
 const formatEventMessage = (ev: any): string => {
   if (ev.message) return ev.message;
@@ -75,6 +75,24 @@ export const CoordinatorDashboard: React.FC = () => {
 
   // Selected audit inspection
   const [selectedAuditLog, setSelectedAuditLog] = useState<AllocationAuditLog[] | null>(null);
+
+  // SLA Metrics state
+  const [slaMetrics, setSlaMetrics] = useState<AdminMetrics | null>(null);
+  const [showMetricsModal, setShowMetricsModal] = useState(false);
+  const [loadingMetrics, setLoadingMetrics] = useState(false);
+
+  // System Audit Logs state
+  const [systemAuditLogs, setSystemAuditLogs] = useState<AllocationAuditLog[] | null>(null);
+  const [showSystemLogsModal, setShowSystemLogsModal] = useState(false);
+
+  // Manual Override state
+  const [overrideReq, setOverrideReq] = useState<BloodRequest | null>(null);
+  const [overrideReason, setOverrideReason] = useState('Emergency clinical priority override');
+  const [overrideDonorId, setOverrideDonorId] = useState('');
+  const [overrideUnitId, setOverrideUnitId] = useState('');
+  const [availableDonors, setAvailableDonors] = useState<any[]>([]);
+  const [availableUnits, setAvailableUnits] = useState<InventoryUnit[]>([]);
+  const [submittingOverride, setSubmittingOverride] = useState(false);
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
@@ -261,6 +279,66 @@ export const CoordinatorDashboard: React.FC = () => {
     }
   };
 
+  const fetchSlaMetrics = async () => {
+    setLoadingMetrics(true);
+    try {
+      const data = await api.get<AdminMetrics>('/admin/metrics');
+      setSlaMetrics(data);
+      setShowMetricsModal(true);
+    } catch (err) {
+      console.error('Failed to load SLA metrics:', err);
+      setError(err instanceof Error ? err.message : 'Could not load SLA metrics.');
+    } finally {
+      setLoadingMetrics(false);
+    }
+  };
+
+  const fetchSystemAuditLogs = async () => {
+    try {
+      const logs = await api.get<AllocationAuditLog[]>('/audit/logs');
+      setSystemAuditLogs(logs);
+      setShowSystemLogsModal(true);
+    } catch (err) {
+      console.error('Failed to load system audit logs:', err);
+      setError(err instanceof Error ? err.message : 'Could not load system audit logs.');
+    }
+  };
+
+  const openOverrideModal = async (req: BloodRequest) => {
+    setOverrideReq(req);
+    setOverrideReason('Emergency clinical priority escalation');
+    setOverrideDonorId('');
+    setOverrideUnitId('');
+    try {
+      const [donors, inv] = await Promise.all([
+        api.get<any[]>('/donors'),
+        api.get<InventoryUnit[]>('/inventory'),
+      ]);
+      setAvailableDonors(donors.filter((d) => d.is_available));
+      setAvailableUnits(inv.filter((u) => u.status === 'AVAILABLE'));
+    } catch (err) {
+      console.error('Failed to load resources for manual override:', err);
+    }
+  };
+
+  const handleApplyOverride = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!overrideReq) return;
+    setSubmittingOverride(true);
+    try {
+      const body: any = { reason: overrideReason };
+      if (overrideDonorId) body.donor_id = overrideDonorId;
+      if (overrideUnitId) body.inventory_unit_id = overrideUnitId;
+      await api.post(`/admin/allocations/${overrideReq.id}/override`, body);
+      setOverrideReq(null);
+      await fetchRequests();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to apply manual override.');
+    } finally {
+      setSubmittingOverride(false);
+    }
+  };
+
   return (
     <div>
       {/* Simulation Controller in Plain English */}
@@ -280,6 +358,25 @@ export const CoordinatorDashboard: React.FC = () => {
           </div>
 
           <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <button
+              id="btn-sla-metrics"
+              onClick={fetchSlaMetrics}
+              className="btn btn-secondary"
+              style={{ fontSize: '0.85rem' }}
+              disabled={loadingMetrics}
+            >
+              <BarChart3 size={14} />
+              {loadingMetrics ? 'Loading SLA...' : 'Clinical SLA Metrics'}
+            </button>
+            <button
+              id="btn-system-audit"
+              onClick={fetchSystemAuditLogs}
+              className="btn btn-secondary"
+              style={{ fontSize: '0.85rem' }}
+            >
+              <FileText size={14} />
+              City Audit Trail
+            </button>
             <button
               id="btn-reset-demo"
               onClick={handleResetSeed}
@@ -470,7 +567,7 @@ export const CoordinatorDashboard: React.FC = () => {
                             <span style={{ color: 'var(--text-dim)' }}>Searching...</span>
                           )}
                         </td>
-                        <td style={{ padding: '0.65rem', textAlign: 'right' }}>
+                        <td style={{ padding: '0.65rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
                           <button
                             onClick={() => inspectExplanation(req.id)}
                             className="btn btn-secondary"
@@ -479,6 +576,17 @@ export const CoordinatorDashboard: React.FC = () => {
                             <Info size={12} />
                             Explain
                           </button>
+                          {req.status !== 'FULFILLED' && req.status !== 'CANCELLED' && (
+                            <button
+                              onClick={() => openOverrideModal(req)}
+                              className="btn btn-secondary"
+                              style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem', marginLeft: '0.35rem' }}
+                              title="Clinical coordinator manual override"
+                            >
+                              <SlidersHorizontal size={12} />
+                              Override
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -588,6 +696,258 @@ export const CoordinatorDashboard: React.FC = () => {
                 </div>
               ))
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Clinical SLA Metrics Modal */}
+      {showMetricsModal && slaMetrics && (
+        <div
+          onClick={() => setShowMetricsModal(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '1rem',
+          }}
+        >
+          <div
+            className="glass-panel"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '640px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <BarChart3 size={20} color="var(--cyan-400)" />
+                Clinical SLA & Performance Telemetry
+              </h3>
+              <button onClick={() => setShowMetricsModal(false)} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem' }}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
+              <div style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>MEAN TIME TO SECURE (MTTS)</div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--cyan-400)', marginTop: '0.25rem' }}>
+                  {slaMetrics.mean_time_to_secure_seconds}s
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>From intake to cold-chain lock / donor claim</div>
+              </div>
+
+              <div style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>DONOR CONVERSION RATE</div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--emerald-400)', marginTop: '0.25rem' }}>
+                  {slaMetrics.donor_acceptance_conversion_rate}%
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>Alerted volunteers who accept dispatch</div>
+              </div>
+
+              <div style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>RE-PLAN FREQUENCY</div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--amber-400)', marginTop: '0.25rem' }}>
+                  {slaMetrics.replan_rate}%
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>Requests triggered into automated fallback</div>
+              </div>
+
+              <div style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>AVG TRANSIT RADIUS</div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '0.25rem' }}>
+                  {slaMetrics.average_transit_distance_km} <span style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>km</span>
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>PostGIS geodesic courier / donor path</div>
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--color-bg)', padding: '0.85rem 1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Total Emergency Requests Processed:</span>
+              <span style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--text-main)' }}>{slaMetrics.total_requests_processed}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* City-Wide System Audit Trail Modal */}
+      {showSystemLogsModal && systemAuditLogs && (
+        <div
+          onClick={() => setShowSystemLogsModal(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '1rem',
+          }}
+        >
+          <div
+            className="glass-panel"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '720px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <FileText size={20} color="var(--emerald-400)" />
+                City-Wide System Audit Trail (Live DB)
+              </h3>
+              <button onClick={() => setShowSystemLogsModal(false)} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem' }}>
+                ✕
+              </button>
+            </div>
+
+            {systemAuditLogs.length === 0 ? (
+              <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>No system audit logs found.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {systemAuditLogs.map((log) => (
+                  <div key={log.id} style={{ background: 'var(--color-bg)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <span className="badge badge-cyan">{formatStatusText(log.decision_type)}</span>
+                        <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
+                          Req: {log.request_id.slice(0, 8)}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{new Date(log.created_at).toLocaleTimeString()}</span>
+                    </div>
+                    <p style={{ fontSize: '0.88rem', color: 'var(--color-text-main)', marginBottom: '0.25rem' }}>
+                      {log.rationale_summary}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Manual Coordinator Override Modal */}
+      {overrideReq && (
+        <div
+          onClick={() => setOverrideReq(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '1rem',
+          }}
+        >
+          <div
+            className="glass-panel highlight-cyan"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '520px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={{ fontSize: '1.15rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <SlidersHorizontal size={18} color="var(--cyan-400)" />
+                Clinical Coordinator Manual Override
+              </h3>
+              <button onClick={() => setOverrideReq(null)} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem' }}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ background: 'var(--color-bg)', padding: '0.85rem', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.85rem', border: '1px solid var(--border-subtle)' }}>
+              <div>Target Request: <b>{overrideReq.patient_id_token}</b></div>
+              <div>Blood Needed: <b style={{ color: 'var(--crimson-500)' }}>{overrideReq.units_requested}x {overrideReq.required_blood_group} ({overrideReq.component_type})</b></div>
+              <div>Status: <b>{formatStatusText(overrideReq.status)}</b></div>
+            </div>
+
+            <form onSubmit={handleApplyOverride} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              <div>
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.3rem' }}>
+                  Assign Compatible Blood Bank Unit (Optional)
+                </label>
+                <select
+                  className="select-field"
+                  value={overrideUnitId}
+                  onChange={(e) => {
+                    setOverrideUnitId(e.target.value);
+                    if (e.target.value) setOverrideDonorId('');
+                  }}
+                >
+                  <option value="">-- None / Keep current or pick donor --</option>
+                  {availableUnits.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      Bag {u.batch_number} ({u.blood_group} {u.component_type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.3rem' }}>
+                  Assign Available Volunteer Donor (Optional)
+                </label>
+                <select
+                  className="select-field"
+                  value={overrideDonorId}
+                  onChange={(e) => {
+                    setOverrideDonorId(e.target.value);
+                    if (e.target.value) setOverrideUnitId('');
+                  }}
+                >
+                  <option value="">-- None / Keep current or pick unit --</option>
+                  {availableDonors.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      Volunteer {d.id.slice(0, 8)} ({d.blood_group}) - Reliability: {Math.round((d.reliability_score || 0.9) * 100)}%
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.3rem' }}>
+                  Clinical Justification Reason (Required)
+                </label>
+                <textarea
+                  className="input-field"
+                  rows={2}
+                  required
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  placeholder="State the medical or logistical justification..."
+                  style={{ resize: 'vertical' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem' }}>
+                <button type="button" onClick={() => setOverrideReq(null)} className="btn btn-secondary">
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingOverride || (!overrideUnitId && !overrideDonorId)}
+                  className="btn btn-cyan"
+                >
+                  <CheckCircle2 size={15} />
+                  {submittingOverride ? 'Applying Override...' : 'Confirm Manual Override'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

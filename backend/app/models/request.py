@@ -44,9 +44,20 @@ class RequestStatus(str, Enum):
 
 
 
+import secrets
+import string
+
+
+def generate_request_code() -> str:
+    """Generate a clean, readable 6-character short code, e.g. REQ-8492 or REQ-734K."""
+    random_part = "".join(secrets.choice(string.digits + string.ascii_uppercase) for _ in range(4))
+    return f"REQ-{random_part}"
+
+
 class BloodRequest(TimestampedModel):
     __tablename__ = "blood_requests"
 
+    code = Column(String(16), unique=True, index=True, nullable=False, default=generate_request_code)
     hospital_id = Column(String, ForeignKey("hospitals.id", ondelete="CASCADE"), nullable=False)
     patient_id_token = Column(String, index=True, nullable=False)
     required_blood_group = Column(String, index=True, nullable=False)

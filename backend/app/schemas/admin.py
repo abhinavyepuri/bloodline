@@ -28,3 +28,14 @@ class AdminOverrideOut(BaseModel):
     allocation_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AdminMetricsOut(BaseModel):
+    mean_time_to_secure_seconds: float = Field(..., description="Mean Time to Secure (MTTS) in seconds")
+    donor_acceptance_conversion_rate: float = Field(..., description="Percentage of alerted donors who accepted")
+    replan_rate: float = Field(..., description="Percentage of requests that required re-planning")
+    total_requests_processed: int = Field(..., description="Total emergency requests recorded")
+    average_transit_distance_km: float = Field(..., description="Average distance to recipient hospital in km")
+
+    model_config = ConfigDict(from_attributes=True)
+

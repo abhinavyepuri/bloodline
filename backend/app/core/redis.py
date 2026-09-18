@@ -37,6 +37,33 @@ async def ping_redis() -> bool:
         return False
 
 
+# Atomic slot claiming Lua script: evaluates existing hold and claims next free slot in 1 round-trip
+LUA_CLAIM_SLOT = """
+local req_id = KEYS[1]
+local max_units = tonumber(ARGV[1])
+local donor_id = ARGV[2]
+local ttl = tonumber(ARGV[3])
+
+-- 1. Idempotency: if donor already holds a slot on this request, return that slot
+for i = 0, max_units - 1 do
+    local key = "lock:hard:req:" .. req_id .. ":unit:" .. i
+    if redis.call("GET", key) == donor_id then
+        return i
+    end
+end
+
+-- 2. Claim first free slot atomically
+for i = 0, max_units - 1 do
+    local key = "lock:hard:req:" .. req_id .. ":unit:" .. i
+    if redis.call("SET", key, donor_id, "NX", "EX", ttl) then
+        return i
+    end
+end
+
+return -1
+"""
+
+
 class ConcurrencyLockManager:
     """
     Distributed lock helper backed by Redis.
@@ -50,7 +77,7 @@ class ConcurrencyLockManager:
 
     * **Hard lock / unit claim** — one key per *unit slot*
       (``lock:hard:req:{request_id}:unit:{index}``). A donor claims a slot with
-      an atomic SET NX across the free slots, so N units can be filled by N
+      an atomic Lua script across the free slots, so N units can be filled by N
       distinct donors while two donors can never take the same slot.
     """
 
@@ -66,6 +93,10 @@ class ConcurrencyLockManager:
     def _slot_key(request_id: str, index: int) -> str:
         return f"lock:hard:req:{request_id}:unit:{index}"
 
+    @staticmethod
+    def _timeout_key(request_id: str) -> str:
+        return f"alert:timeout:{request_id}"
+
     # ------------------------------------------------------------ soft lock
     async def register_alerted_donors(
         self, request_id: str, donor_ids: List[str], ttl_seconds: int = 180
@@ -77,6 +108,8 @@ class ConcurrencyLockManager:
         pipe = self.redis.pipeline()
         pipe.sadd(key, *donor_ids)
         pipe.expire(key, ttl_seconds)
+        # Also schedule alert timeout key for reactive keyspace expiry
+        pipe.set(self._timeout_key(request_id), "active", ex=ttl_seconds)
         await pipe.execute()
 
     async def get_alerted_donors(self, request_id: str) -> Set[str]:
@@ -88,7 +121,21 @@ class ConcurrencyLockManager:
         """Whether this donor was actually alerted for this request."""
         return bool(await self.redis.sismember(self._zone_key(request_id), donor_id))
 
+    async def filter_alerted_requests(self, request_ids: List[str], donor_id: str) -> Set[str]:
+        """
+        Check membership for a donor across multiple requests in a single pipelined Redis round-trip.
+        Eliminates N sequential network hops in dashboard alert lookups.
+        """
+        if not request_ids:
+            return set()
+        pipe = self.redis.pipeline()
+        for req_id in request_ids:
+            pipe.sismember(self._zone_key(req_id), donor_id)
+        results = await pipe.execute()
+        return {req_id for req_id, is_member in zip(request_ids, results) if is_member}
+
     async def remove_alerted_donor(self, request_id: str, donor_id: str) -> None:
+
         """Drop a single donor from a request's alert zone (used on decline)."""
         await self.redis.srem(self._zone_key(request_id), donor_id)
 
@@ -111,16 +158,27 @@ class ConcurrencyLockManager:
         ttl_seconds: int = 3600,
     ) -> Optional[int]:
         """
-        Atomically claim one free unit slot for this donor.
+        Atomically claim one free unit slot for this donor in a single round-trip Lua script.
 
         Returns the claimed slot index, or None when every slot is already taken.
-        Concurrent callers cannot claim the same slot: each SET NX is atomic.
+        Concurrent callers cannot claim the same slot: Redis Lua executes atomically.
         """
-        for index in range(max(max_units, 1)):
-            key = self._slot_key(request_id, index)
-            if await self.redis.set(key, donor_id, nx=True, ex=ttl_seconds):
-                return index
-        return None
+        if max_units <= 0:
+            return None
+
+        try:
+            res = await self.redis.eval(
+                LUA_CLAIM_SLOT, 1, request_id, max_units, donor_id, ttl_seconds
+            )
+            slot = int(res) if res is not None else -1
+            return slot if slot >= 0 else None
+        except Exception:
+            # Fallback for environments where EVAL might be disabled
+            for index in range(max(max_units, 1)):
+                key = self._slot_key(request_id, index)
+                if await self.redis.set(key, donor_id, nx=True, ex=ttl_seconds):
+                    return index
+            return None
 
     async def donor_slot(self, request_id: str, donor_id: str, max_units: int) -> Optional[int]:
         """The slot index this donor already holds on this request, if any."""
@@ -141,10 +199,36 @@ class ConcurrencyLockManager:
         """Number of unit slots claimed so far."""
         return len(await self.claimed_slots(request_id, max_units))
 
+    async def release_donor_slot(self, request_id: str, donor_id: str, max_units: int) -> bool:
+        """Release a specific donor's hard-locked unit slot if held."""
+        slot = await self.donor_slot(request_id, donor_id, max_units)
+        if slot is not None:
+            await self.redis.delete(self._slot_key(request_id, slot))
+            return True
+        return False
+
+    # ----------------------------------------------------------- timeout / TTL
+    @staticmethod
+    def _timeout_key(request_id: str) -> str:
+        return f"alert:timeout:{request_id}"
+
+    async def schedule_alert_timeout(self, request_id: str, timeout_seconds: int = 180) -> None:
+        """Sets a timer key with TTL to trigger automated radius cascade when expired."""
+        await self.redis.set(self._timeout_key(request_id), "active", ex=timeout_seconds)
+
+    async def cancel_alert_timeout(self, request_id: str) -> None:
+        """Cancels any pending timeout cascade (e.g. when request is fully covered)."""
+        await self.redis.delete(self._timeout_key(request_id))
+
+    async def is_alert_timeout_pending(self, request_id: str) -> bool:
+        """Returns True if the 180s alert window timer is still actively counting down."""
+        return bool(await self.redis.exists(self._timeout_key(request_id)))
+
     # -------------------------------------------------------------- release
     async def release_request_locks(self, request_id: str) -> None:
-        """Drop every soft and hard lock belonging to a request."""
-        keys: List[str] = [self._zone_key(request_id)]
+        """Drop every soft, hard, and timeout lock belonging to a request."""
+        keys: List[str] = [self._zone_key(request_id), self._timeout_key(request_id)]
         async for key in self.redis.scan_iter(match=f"lock:hard:req:{request_id}:unit:*"):
             keys.append(key)
         await self.redis.delete(*keys)
+

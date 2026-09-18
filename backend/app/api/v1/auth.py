@@ -31,6 +31,13 @@ async def register_user(req: RegisterRequest, db: AsyncSession = Depends(get_db)
     # Normalize role to UserRole enum (supports 'hospital', 'HOSPITAL', etc.)
     role_enum = UserRole(req.role) if isinstance(req.role, str) else req.role
 
+    # Security check: Administrative and Coordinator accounts cannot be registered publicly
+    if role_enum in (UserRole.ADMIN, UserRole.COORDINATOR):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrative accounts cannot be created via public registration.",
+        )
+
     user = User(
         email=normalized_email,
         hashed_password=get_password_hash(req.password),

@@ -22,6 +22,10 @@ class AllocationOut(BaseModel):
 
 class DonorRespondRequest(BaseModel):
     action: str = Field(..., description="Action: 'ACCEPT' or 'DECLINE'")
+    request_id: Optional[str] = Field(
+        default=None,
+        description="Optional request ID or short code (e.g. 'REQ-8492' or UUID). If omitted, resolves automatically to the active alert.",
+    )
 
     model_config = ConfigDict(
         extra="forbid",

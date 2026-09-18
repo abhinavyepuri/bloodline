@@ -17,6 +17,8 @@ PROTECTED_ROUTES = [
     ("GET", "/api/v1/inventory/orders"),
     ("GET", "/api/v1/audit/logs"),
     ("POST", "/api/v1/admin/reset-seed"),
+    ("GET", "/api/v1/admin/metrics"),
+    ("GET", "/api/v1/admin/overview"),
 ]
 
 
@@ -160,3 +162,99 @@ async def test_authenticated_websocket_is_accepted(hospital_token):
     ) as ws:
         ws.send_text("ping")
         assert json.loads(ws.receive_text()) == {"type": "pong"}
+
+
+async def test_admin_self_registration_is_forbidden(client):
+    """Anonymous callers cannot register as ADMIN or COORDINATOR."""
+    for forbidden_role in ("ADMIN", "COORDINATOR"):
+        resp = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": f"attacker_{forbidden_role.lower()}@test.org",
+                "password": "attackpassword123",
+                "full_name": "Unauthorized Escalator",
+                "phone_number": "+19998887776",
+                "role": forbidden_role,
+            },
+        )
+        assert resp.status_code == 403, (
+            f"Registration with role {forbidden_role} returned {resp.status_code}; expected 403 Forbidden"
+        )
+
+
+async def test_security_headers_are_present(client):
+    """Defensive HTTP headers must be present on responses."""
+    resp = await client.get("/health")
+    assert resp.headers.get("x-content-type-options") == "nosniff"
+    assert resp.headers.get("x-frame-options") == "DENY"
+    assert resp.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+
+
+async def test_admin_metrics_rbac_and_schema(client, donor_token, hospital_token, coordinator_token, admin_token):
+    """Clinical SLA metrics endpoint enforces strict RBAC and returns required telemetry schema."""
+    # Non-staff roles forbidden
+    assert (await client.get("/api/v1/admin/metrics", headers=auth(donor_token))).status_code == 403
+    assert (await client.get("/api/v1/admin/metrics", headers=auth(hospital_token))).status_code == 403
+
+    # Coordinator and Admin permitted
+    for token in (coordinator_token, admin_token):
+        resp = await client.get("/api/v1/admin/metrics", headers=auth(token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "mean_time_to_secure_seconds" in data
+        assert "donor_acceptance_conversion_rate" in data
+        assert "replan_rate" in data
+        assert "total_requests_processed" in data
+        assert "average_transit_distance_km" in data
+        assert isinstance(data["mean_time_to_secure_seconds"], (int, float))
+        assert isinstance(data["donor_acceptance_conversion_rate"], (int, float))
+        assert isinstance(data["replan_rate"], (int, float))
+        assert isinstance(data["total_requests_processed"], int)
+        assert isinstance(data["average_transit_distance_km"], (int, float))
+
+
+async def test_request_correlation_id_propagated(client):
+    """Correlation tracing ensures every request has an auditable X-Request-ID trace."""
+    # Auto-generated ID
+    resp1 = await client.get("/health")
+    assert "x-request-id" in resp1.headers
+    assert resp1.headers["x-request-id"].startswith("req_")
+
+    # Custom caller trace ID propagation
+    custom_trace = "trace-emergency-audit-uuid-99"
+    resp2 = await client.get("/health", headers={"X-Request-ID": custom_trace})
+    assert resp2.headers.get("x-request-id") == custom_trace
+
+
+async def test_rate_limiting_headers_present(client, coordinator_token):
+    """Rate limit headers are present on API responses."""
+    resp = await client.get("/api/v1/donors", headers={**auth(coordinator_token), "X-Testing": "false"})
+    assert resp.status_code == 200
+    assert "x-ratelimit-limit" in resp.headers
+    assert "x-ratelimit-remaining" in resp.headers
+    assert "x-ratelimit-reset" in resp.headers
+
+
+async def test_rate_limit_exceeded_returns_429(client):
+    """When a client exceeds the sliding window threshold, HTTP 429 is returned."""
+    fake_token = "Bearer test_attacker_rate_limit_token_999"
+    headers = {"Authorization": fake_token, "X-Testing": "false"}
+    hit_429 = False
+    for _ in range(25):
+        resp = await client.post(
+            "/api/v1/auth/login",
+            headers=headers,
+            json={"email": "bad@attempt.com", "password": "wrong"},
+        )
+        if resp.status_code == 429:
+            hit_429 = True
+            assert "retry-after" in resp.headers
+            assert resp.json()["error_type"] == "RATE_LIMIT_EXCEEDED"
+            break
+    assert hit_429, "Expected rate limiter to return HTTP 429 when threshold exceeded"
+
+
+
+
+
+

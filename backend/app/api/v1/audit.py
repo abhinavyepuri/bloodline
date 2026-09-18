@@ -51,8 +51,6 @@ async def get_request_explanation(
         .order_by(AllocationAuditLog.created_at.asc())
     )
     logs = list(res.scalars().all())
-    if not logs:
-        raise HTTPException(status_code=404, detail="No audit logs available for this request")
     return [AllocationAuditLogOut.model_validate(log) for log in logs]
 
 

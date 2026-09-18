@@ -1,6 +1,6 @@
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -13,12 +13,15 @@ from app.models.donor import Donor
 from app.models.request import BloodRequest, RequestStatus
 from app.models.user import User
 from app.schemas.allocation import DonorRespondOut, DonorRespondRequest
-from app.schemas.donor import DonorOut, DonorPublicOut, DonorUpdateAvailability
+from app.schemas.donor import DonorOut, DonorPublicOut, DonorTelemetryIn, DonorTelemetryOut, DonorUpdateAvailability
 from app.schemas.request import BloodRequestOut
 from app.services.allocation_service import AllocationService
 from app.services.donor_service import is_plasma_derived
 from app.services.matching_service import MatchingEngineService
+from app.services.notification_queue import NotificationQueueService
+from app.services.tracking_service import LiveTrackingService
 from app.websocket.connection_manager import manager
+
 
 router = APIRouter()
 
@@ -64,19 +67,43 @@ async def update_donor_availability(
 
     # Operational staff use availability for planning; other donors have no business
     # seeing a given donor's location.
-    await manager.broadcast_operational(
-        {
-            "type": "DONOR_AVAILABILITY_CHANGED",
-            "donor_id": donor.id,
-            "blood_group": donor.blood_group,
-            "is_available": donor.is_available,
-        }
+    manager.dispatch(
+        manager.broadcast_operational(
+            {
+                "type": "DONOR_AVAILABILITY_CHANGED",
+                "donor_id": donor.id,
+                "blood_group": donor.blood_group,
+                "is_available": donor.is_available,
+            }
+        )
     )
 
     return DonorOut.model_validate(donor)
 
 
+@router.post("/me/telemetry", response_model=DonorTelemetryOut)
+async def submit_donor_telemetry(
+    telemetry: DonorTelemetryIn,
+    db: AsyncSession = Depends(get_db),
+    donor: Donor = Depends(get_current_donor),
+    current_user: User = Depends(require_roles(UserRole.DONOR)),
+):
+    """
+    [USER-FACING] Ingest live GPS coordinates from mobile donor app.
+    Updates PostGIS location, calculates real-time ETA to recipient hospital,
+    and triggers automated 'DONOR_APPROACHING_WARD' geofence alerts within 500m.
+    """
+    return await LiveTrackingService.process_telemetry(
+        db=db,
+        donor=donor,
+        latitude=telemetry.latitude,
+        longitude=telemetry.longitude,
+        speed_kmh=telemetry.speed_kmh,
+    )
+
+
 @router.get("/requests/active", response_model=List[BloodRequestOut])
+
 async def get_active_emergency_alerts(
     db: AsyncSession = Depends(get_db),
     donor: Donor = Depends(get_current_donor),
@@ -99,16 +126,30 @@ async def get_active_emergency_alerts(
         .order_by(BloodRequest.calculated_urgency_score.desc())
     )
 
+    active_requests = [
+        r for r in req_res.scalars().all()
+        if r.units_covered < r.units_requested
+    ]
+    if not active_requests:
+        return []
+
     redis_conn = await get_redis()
     lock_mgr = ConcurrencyLockManager(redis_conn)
 
-    alerts: List[BloodRequestOut] = []
-    for request in req_res.scalars().all():
-        # A request that is fully covered no longer needs this donor.
-        if request.units_covered >= request.units_requested:
-            continue
+    # Batch check membership and TTL for all candidate requests in a single round-trip
+    pipe = redis_conn.pipeline()
+    for req in active_requests:
+        pipe.sismember(lock_mgr._zone_key(req.id), donor.id)
+        pipe.ttl(lock_mgr._zone_key(req.id))
+    raw_results = await pipe.execute()
 
-        if not await lock_mgr.is_donor_alerted(request.id, donor.id):
+    alerts: List[BloodRequestOut] = []
+    for idx, request in enumerate(active_requests):
+        is_member = raw_results[idx * 2]
+        ttl_val = raw_results[idx * 2 + 1]
+        ttl_seconds = ttl_val if isinstance(ttl_val, int) and ttl_val >= 0 else None
+
+        if not is_member:
             continue
 
         # Plasma-derived components follow the plasma matrix, not the red-cell one.
@@ -120,26 +161,65 @@ async def get_active_emergency_alerts(
 
         alerts.append(
             BloodRequestOut.model_validate(request).model_copy(
-                update={"alert_expires_in_seconds": await lock_mgr.alert_zone_ttl(request.id)}
+                update={"alert_expires_in_seconds": ttl_seconds}
             )
         )
 
     return alerts
 
 
-@router.post("/requests/{id}/respond", response_model=DonorRespondOut)
-async def respond_to_emergency_dispatch(
-    id: str,
+
+@router.post("/respond", response_model=DonorRespondOut)
+async def respond_to_active_alert_contextual(
     resp: DonorRespondRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     donor: Donor = Depends(get_current_donor),
     current_user: User = Depends(require_roles(UserRole.DONOR)),
 ):
-    """[USER-FACING] Donor responds (ACCEPT / DECLINE) to emergency proximity alert."""
+    """
+    [USER-FACING] Contextual 1-Tap Response for mobile app.
+    Donor responds (ACCEPT / DECLINE) without needing a long URL ID.
+    If 'request_id' is supplied in the request body, it targets that request or short code (e.g. 'REQ-8492');
+    otherwise, it automatically discovers the emergency alert currently active for this donor.
+    """
+    target_request_id = resp.request_id
+
+    if not target_request_id:
+        active_alerts = await get_active_emergency_alerts(db=db, donor=donor, current_user=current_user)
+        if not active_alerts:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No active emergency dispatch alert is currently open for your account.",
+            )
+        target_request_id = active_alerts[0].id
+
+    allocation_svc = AllocationService(db)
+    result = await allocation_svc.process_donor_response(
+        request_id=target_request_id,
+        donor_id=donor.id,
+        action=resp.action,
+    )
+    background_tasks.add_task(NotificationQueueService.process_next_batch, 20)
+    return DonorRespondOut.model_validate(result)
+
+
+@router.post("/requests/{id}/respond", response_model=DonorRespondOut)
+async def respond_to_emergency_dispatch(
+    id: str,
+    resp: DonorRespondRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    donor: Donor = Depends(get_current_donor),
+    current_user: User = Depends(require_roles(UserRole.DONOR)),
+):
+    """[USER-FACING] Donor responds (ACCEPT / DECLINE) using either full UUID or short code (e.g. 'REQ-8492')."""
     allocation_svc = AllocationService(db)
     result = await allocation_svc.process_donor_response(
         request_id=id,
         donor_id=donor.id,
         action=resp.action,
     )
+    background_tasks.add_task(NotificationQueueService.process_next_batch, 20)
     return DonorRespondOut.model_validate(result)
+

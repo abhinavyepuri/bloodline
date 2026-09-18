@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Activity, AlertCircle, Droplet } from 'lucide-react';
+import { Activity, AlertCircle, Droplet, UserPlus, LogIn } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { DEV_ROLE_SWITCHER } from '../config';
+import { api } from '../lib/api';
 
 /** Demo accounts, shown only in development to make the walkthrough quick. */
 const DEMO_ACCOUNTS: { label: string; email: string }[] = [
@@ -19,9 +20,35 @@ export const LoginScreen: React.FC = () => {
   const { login, isLoading, error } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [fullName, setFullName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [regRole, setRegRole] = useState<'DONOR' | 'HOSPITAL' | 'BLOOD_BANK'>('DONOR');
+  const [regError, setRegError] = useState<string | null>(null);
+  const [registering, setRegistering] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isRegistering) {
+      setRegError(null);
+      setRegistering(true);
+      try {
+        await api.post('/auth/register', {
+          email: email.trim(),
+          password,
+          full_name: fullName.trim(),
+          phone_number: phoneNumber.trim(),
+          role: regRole,
+        });
+        await login(email.trim(), password);
+      } catch (err) {
+        setRegError(err instanceof Error ? err.message : 'Registration failed.');
+      } finally {
+        setRegistering(false);
+      }
+      return;
+    }
+
     try {
       await login(email.trim(), password);
     } catch {
@@ -30,6 +57,7 @@ export const LoginScreen: React.FC = () => {
   };
 
   const signInAs = async (demoEmail: string) => {
+    setIsRegistering(false);
     setEmail(demoEmail);
     setPassword(DEMO_PASSWORD);
     try {
@@ -96,11 +124,111 @@ export const LoginScreen: React.FC = () => {
             boxShadow: '0 10px 30px rgba(0,0,0,0.06)',
           }}
         >
+          {/* Mode Switcher */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.25rem', background: 'var(--color-bg)', padding: '0.25rem', borderRadius: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setIsRegistering(false)}
+              style={{
+                padding: '0.45rem',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: 'none',
+                background: !isRegistering ? 'var(--crimson-500)' : 'transparent',
+                color: !isRegistering ? 'white' : 'var(--text-muted)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.35rem',
+              }}
+            >
+              <LogIn size={13} />
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsRegistering(true)}
+              style={{
+                padding: '0.45rem',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: 'none',
+                background: isRegistering ? 'var(--crimson-500)' : 'transparent',
+                color: isRegistering ? 'white' : 'var(--text-muted)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.35rem',
+              }}
+            >
+              <UserPlus size={13} />
+              Register
+            </button>
+          </div>
+
+          {isRegistering && (
+            <>
+              <label
+                htmlFor="reg-fullname"
+                style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}
+              >
+                Full Name / Organization Name
+              </label>
+              <input
+                id="reg-fullname"
+                type="text"
+                required
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Dr. Jane Doe / City Donor"
+                style={inputStyle}
+              />
+
+              <label
+                htmlFor="reg-phone"
+                style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, margin: '0.75rem 0 0.35rem' }}
+              >
+                Contact Phone Number
+              </label>
+              <input
+                id="reg-phone"
+                type="tel"
+                required
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                placeholder="+1-555-0199"
+                style={inputStyle}
+              />
+
+              <label
+                htmlFor="reg-role"
+                style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, margin: '0.75rem 0 0.35rem' }}
+              >
+                Account Type
+              </label>
+              <select
+                id="reg-role"
+                className="select-field"
+                value={regRole}
+                onChange={(e) => setRegRole(e.target.value as any)}
+                style={{ ...inputStyle, marginBottom: '0.75rem' }}
+              >
+                <option value="DONOR">Volunteer Donor (Mobile & Web)</option>
+                <option value="HOSPITAL">Hospital Emergency Desk</option>
+                <option value="BLOOD_BANK">Blood Bank Storage & Logistics</option>
+              </select>
+            </>
+          )}
+
           <label
             htmlFor="login-email"
             style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}
           >
-            Email
+            Email Address
           </label>
           <input
             id="login-email"
@@ -109,7 +237,7 @@ export const LoginScreen: React.FC = () => {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@hospital.org"
+            placeholder="you@smartblood.org"
             style={inputStyle}
           />
 
@@ -127,15 +255,16 @@ export const LoginScreen: React.FC = () => {
           <input
             id="login-password"
             type="password"
-            autoComplete="current-password"
+            autoComplete={isRegistering ? 'new-password' : 'current-password'}
             required
+            minLength={6}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
+            placeholder="•••••••• (min 6 chars)"
             style={inputStyle}
           />
 
-          {error && (
+          {(error || regError) && (
             <div
               role="alert"
               style={{
@@ -152,13 +281,13 @@ export const LoginScreen: React.FC = () => {
               }}
             >
               <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
-              <span>{error}</span>
+              <span>{regError || error}</span>
             </div>
           )}
 
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={isLoading || registering}
             style={{
               width: '100%',
               marginTop: '1.25rem',
@@ -169,11 +298,17 @@ export const LoginScreen: React.FC = () => {
               border: 'none',
               background: 'var(--crimson-500)',
               color: 'white',
-              cursor: isLoading ? 'wait' : 'pointer',
-              opacity: isLoading ? 0.7 : 1,
+              cursor: (isLoading || registering) ? 'wait' : 'pointer',
+              opacity: (isLoading || registering) ? 0.7 : 1,
             }}
           >
-            {isLoading ? 'Signing in…' : 'Sign in'}
+            {registering
+              ? 'Creating Account...'
+              : isLoading
+              ? 'Signing in…'
+              : isRegistering
+              ? 'Register & Sign In'
+              : 'Sign in'}
           </button>
         </form>
 

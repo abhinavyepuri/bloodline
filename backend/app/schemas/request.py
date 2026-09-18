@@ -69,6 +69,7 @@ class BloodRequestCreate(BaseModel):
 
 class BloodRequestOut(BaseModel):
     id: str
+    code: Optional[str] = Field(None, description="Clean human-readable short code (e.g. 'REQ-8492')")
     hospital_id: str
     hospital_name: Optional[str] = None
     hospital_address: Optional[str] = None

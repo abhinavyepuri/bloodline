@@ -107,8 +107,13 @@ async def db(schema: None) -> AsyncGenerator[AsyncSession, None]:
 async def client(schema: None) -> AsyncGenerator[AsyncClient, None]:
     """An HTTP client speaking to the ASGI app in-process (no live server needed)."""
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"X-Testing": "true"}
+    ) as ac:
         yield ac
+
 
 
 async def login(client: AsyncClient, role: str) -> str:
@@ -145,6 +150,12 @@ async def donor_token(client: AsyncClient, seeded: None) -> str:
     return await login(client, "DONOR")
 
 
+@pytest_asyncio.fixture
+async def admin_token(client: AsyncClient, seeded: None) -> str:
+    return await login(client, "ADMIN")
+
+
 @pytest.fixture
 def demo_password() -> str:
     return DEMO_PASSWORD
+
