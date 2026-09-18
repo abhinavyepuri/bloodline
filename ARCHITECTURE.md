@@ -1,416 +1,840 @@
-# Software Architecture Document: PS-1 Smart Blood & Emergency Donor Network
+# System Architecture
+# SmartBlood — Smart Blood & Emergency Donor Network
 
-## 1. System Design
-
-### 1.1 Problem Framing
-Blood and emergency donor management is inherently a multi-constraint, time-critical dynamic resource-allocation problem—not a static donor directory, nearest-neighbor geolocation query, or First-Come-First-Served (FCFS) dispatch tool. The network operates under extreme uncertainty: blood units expire across variable shelf-lives, emergency clinical demands fluctuate non-linearly with physiological triage status, donor response rates degrade with transit latency and attrition, and cross-matching rules enforce strict biological compatibility constraints. Treating this domain as a sequential polling mechanism or simple search query leads to fatal clinical delays: placing an exclusive lock on a single donor and waiting minutes for an acknowledgment creates dead time where patient condition rapidly deteriorates. This platform models supply and demand as a centralized, continuous optimization graph that dynamically computes utility, orchestrates reserve inventory versus live donor mobilizations, employs parallel optimistic candidate ring-fencing with first-to-confirm hard locks, guarantees end-to-end clinical verification, and autonomously re-optimizes allocations when real-world execution deviates from the planned state.
+**Version:** 1.0  
+**Stack Source:** Stack.md  
+**PRD Source:** PRD.md  
 
 ---
 
-### 1.2 High-Level Architecture
-The system operates as an event-driven closed loop where clinical inputs continuously re-weight optimization parameters, and operational events trigger automated state adjustments.
+## 1. Architecture Overview
+
+SmartBlood uses a **modular monolith** backend architecture implemented as a single FastAPI application with clearly separated internal modules. This approach is chosen deliberately for the prototype because:
+- It simplifies local setup, debugging, and demonstration.
+- It avoids the operational overhead of microservices (separate deployments, service discovery, distributed tracing) that is not warranted for a prototype.
+- The module boundaries are clearly defined, so individual modules can be extracted into independent services in a future production deployment without rewriting business logic.
+
+### Architectural Boundaries
+
+| Boundary | Technology | Notes |
+|:---------|:-----------|:------|
+| Frontend | React 18 + TypeScript + Vite | Role-specific dashboards; communicates via REST and WebSocket |
+| Backend / API | FastAPI (Python 3.12) | Modular monolith; async throughout |
+| Authentication / Authorization | JWT + RBAC (python-jose, passlib/bcrypt) | Stateless; enforced at API layer |
+| Emergency Request Management | requests module (FastAPI router + service) | Handles request lifecycle state machine |
+| Resource Management | inventory module, donor module | Inventory FEFO queries; donor proximity queries |
+| Compatibility Engine | matching_service (Python module) | Stateless deterministic lookup |
+| Allocation / Optimization Engine | allocation_service (Python module) | Weighted multi-factor scoring; heuristic greedy |
+| Re-planning Engine | Embedded in allocation_service; triggered by event hooks | Event-driven; fires on state-change triggers |
+| Verification | Coordinator-managed flag on User/Donor/Hospital/BloodBank | Enforced at allocation filter step |
+| Notification Service | WebSocket Connection Manager | In-process pub/sub; abstracted for future extension |
+| Transportation Estimation | PostGIS ST_Distance + mock speed estimate | Location data in Geography(Point) columns |
+| Database | PostgreSQL 16 + PostGIS 3.4 | Relational with spatial extension |
+| Real-Time Event Mechanism | Native FastAPI WebSocket | Persistent connections; channel-based broadcast |
+| Cache / Concurrency Locks | Redis 7.2 | Distributed soft locks and hard locks (atomic SET NX) |
+| Audit Logging | AllocationAuditLog table (PostgreSQL) | Immutable; never deleted via API |
+
+---
+
+## 2. High-Level Architecture Diagram
 
 ```mermaid
 flowchart TD
     subgraph Actors["Network Actors"]
-        A1[Hospital / Critical Care Clinician]
-        A2[Blood Bank / Regional Center]
-        A3[Volunteer & Directed Donors]
-        A4[Authorized Network Coordinator]
+        A1["Hospital / Clinical Staff\n(HOSPITAL_ADMIN)"]
+        A2["Blood Bank Staff\n(BLOOD_BANK_STAFF)"]
+        A3["Verified Voluntary Donor\n(DONOR)"]
+        A4["Authorized Coordinator\n(SYSTEM_ADMIN)"]
     end
 
-    subgraph Intake["Intake & Verification Layer"]
-        B1[Hospital Identity & License Verifier]
-        B2[Emergency Request Intake & Clinical Validation]
-        B3[Donor Biometric & Health Screening Intake]
+    subgraph Frontend["Frontend Layer\n(React 18 + TypeScript + Vite)"]
+        F1["Hospital Dashboard\n(Request Intake, Tracking, Explanation)"]
+        F2["Blood Bank Dashboard\n(Inventory Management)"]
+        F3["Donor App\n(Availability, Dispatch Response)"]
+        F4["Coordinator Dashboard\n(Live Queue, Audit Logs, Overrides)"]
     end
 
-    subgraph CoreEngine["Coordination & Optimization Engine"]
-        C1[Biological Compatibility & Eligibility Filter]
-        C2[Dynamic Priority & Clinical Urgency Scorer]
-        C3[Multi-Objective Allocation Optimizer]
-        C4[Continuous Re-Planning & Dynamic Trigger]
-        C5[Explainability & Deterministic Audit Engine]
+    subgraph API["Backend API Layer\n(FastAPI Python 3.12)"]
+        API_AUTH["Auth Module\n/api/v1/auth"]
+        API_REQ["Request Module\n/api/v1/requests"]
+        API_INV["Inventory Module\n/api/v1/inventory"]
+        API_DONOR["Donor Module\n/api/v1/donors"]
+        API_AUDIT["Audit Module\n/api/v1/audit"]
+        API_ADMIN["Admin Module\n/api/v1/admin"]
+        API_WS["WebSocket Gateway\n/api/v1/realtime/ws"]
     end
 
-    subgraph StateLayer["Live Data & State Store"]
-        D1[(Live Blood Bank Inventory & Shelf-Life Index)]
-        D2[(Active Patient Requests & Priority Queue)]
-        D3[(Donor Availability, Geo-State & Reliability Index)]
-        D4[(Allocation State Graph & Optimistic Lock Registry)]
+    subgraph Core["Core Engine Layer"]
+        COMPAT["Compatibility Engine\n(matching_service.py)"]
+        ALLOC["Allocation Engine\n(allocation_service.py)"]
+        REPLAN["Re-Planning Trigger\n(embedded in allocation_service)"]
+        NOTIF["Notification Service\n(websocket/connection_manager.py)"]
     end
 
-    subgraph DispatchLayer["Notification & Event Dispatch"]
-        E1[Parallel Priority Notification Service]
-        E2[Real-Time WebSocket Sync Gateway]
+    subgraph DataLayer["Data Layer"]
+        PG[("PostgreSQL 16 + PostGIS 3.4\n(Primary Database)")]
+        REDIS[("Redis 7.2\n(Distributed Locks + Soft/Hard Lock Registry)")]
     end
 
-    Actors --> Intake
-    Intake --> StateLayer
-    StateLayer --> CoreEngine
-    CoreEngine --> StateLayer
-    CoreEngine --> DispatchLayer
-    DispatchLayer --> Actors
-    Actors -.->|First-Ack / Rejection / In-Transit Telemetry| CoreEngine
+    Actors --> Frontend
+    Frontend -->|HTTPS REST| API
+    Frontend -->|WSS| API_WS
+    API --> Core
+    Core --> COMPAT
+    ALLOC --> REDIS
+    Core --> DataLayer
+    API_WS --> NOTIF
+    NOTIF -->|WebSocket Push| Frontend
 ```
 
-* **Actors**: Hospitals/Clinicians submit demand with verified clinical parameters; Blood Banks maintain verified cold-chain stocks; Donors receive targeted alerts and update their transit/readiness status; Coordinators supervise override-level interventions.
-* **Intake & Verification**: Intercepts, sanitizes, and verifies all actors and requests against clinical and institutional credentials prior to state entry.
-* **Coordination Engine**: Consists of strict biological filtering, dynamic urgency weighting, multi-objective inventory/donor allocation, automated re-planning on operational failure, and mathematical audit trail generation.
-* **Live Data Layer**: High-speed, transactional state machine holding optimistic candidate cohort soft-locks, atomic hard-lock transitions, real-time geographic positions, dynamic unit expirations, and active patient queues.
-* **Notification Layer**: Low-latency multi-channel dispatch targeting verified matching candidate cohorts simultaneously with rapid first-ack resolution.
-* **Feedback & Re-Planning Loop**: Continuous telemetry ingest (e.g., donor cancellations, transit delays, worsening triage levels) that triggers immediate delta re-optimizations.
+---
+
+## 3. Component Architecture
+
+### 3.1 Auth Module (`app/api/v1/auth.py` + `app/core/security.py`)
+- **Responsibility:** User registration, login, JWT issuance, password hashing, RBAC enforcement.
+- **Inputs:** Registration payload (email, password, role); login credentials.
+- **Outputs:** JWT access token; user profile object.
+- **Dependencies:** PostgreSQL (User table), passlib/bcrypt, python-jose.
+- **Business Rules:** Passwords are hashed before storage. JWT contains `user_id` and `role`. Tokens are verified on every protected endpoint via FastAPI dependency injection.
+
+### 3.2 Emergency Request Module (`app/api/v1/requests.py` + request lifecycle)
+- **Responsibility:** CRUD for BloodRequest entities; urgency score computation; allocation pipeline trigger.
+- **Inputs:** Hospital creates request with blood group, component type, quantity, triage level, deadline.
+- **Outputs:** BloodRequest record; urgency score; allocation pipeline kick-off.
+- **Dependencies:** PostgreSQL (blood_requests table), Allocation Engine (via service call), Notification Service.
+- **Business Rules:** Urgency score is computed using `matching_service.calculate_urgency_score()` at creation and on update. New request triggers `execute_allocation_pipeline()`. Status follows the defined state machine.
+
+### 3.3 Donor Module (`app/api/v1/donors.py` + `app/repositories/donor_repo.py`)
+- **Responsibility:** Donor registration and profile management; availability toggle; location update; dispatch response.
+- **Inputs:** Donor profile data; availability flag; location coordinates; accept/decline response.
+- **Outputs:** Updated donor record; hard-lock claim result; stand-down broadcasts.
+- **Dependencies:** PostgreSQL (donors table with Geography column), Redis (soft/hard lock operations), PostGIS (ST_DWithin proximity queries), Notification Service.
+- **Business Rules:** `find_eligible_donors_in_proximity()` uses `ST_DWithin` with SRID 4326. Only `is_available = true` and verified donors enter the candidate pool. First-accept triggers atomic hard lock upgrade via Redis SET NX.
+
+### 3.4 Inventory Module (`app/api/v1/inventory.py` + `app/repositories/inventory_repo.py`)
+- **Responsibility:** Blood unit CRUD; status management; FEFO-ordered availability queries; reservation lock management.
+- **Inputs:** Blood unit registration data; status update requests.
+- **Outputs:** InventoryUnit records; FEFO-ordered compatible unit lists.
+- **Dependencies:** PostgreSQL (inventory_units table), Redis (lock TTL on LOCKED_RESERVE units).
+- **Business Rules:** FEFO ordering: `ORDER BY expiry_date ASC`. Queries filter `status = AVAILABLE AND expiry_date > NOW()`. `lock_expires_at` is checked against current time for stale-lock detection.
+
+### 3.5 Compatibility Engine (`app/services/matching_service.py`)
+- **Responsibility:** Deterministic ABO/Rh compatibility lookup; urgency score calculation; proximity score computation.
+- **Inputs:** Recipient blood group; component type (RBC or plasma path); triage level; deadline; distance_km.
+- **Outputs:** List of compatible donor blood groups; urgency score float (0-100); proximity score float (0.0-1.0).
+- **Dependencies:** None (pure Python; stateless).
+- **Business Rules:** RBC compatibility matrix and plasma compatibility matrix are statically defined Python dicts. Same input always produces same output. No external API calls.
+
+### 3.6 Allocation Engine (`app/services/allocation_service.py`)
+- **Responsibility:** End-to-end allocation pipeline: compatibility filter -> inventory query (FEFO) -> donor proximity query -> scoring -> soft lock -> broadcast -> hard-lock claim -> audit log.
+- **Inputs:** BloodRequest ID; initial search radius (km).
+- **Outputs:** Allocation record; AllocationAuditLog; request status update; donor soft-lock set; broadcast trigger.
+- **Dependencies:** CompatibilityEngine, DonorRepository, InventoryRepository, Redis (ConcurrencyLockManager), PostgreSQL, NotificationService.
+- **Business Rules:** Inventory-first; donor-fallback. Heuristic greedy scoring (described in Section 6). FEFO applied to inventory. Donor reliability_score factored in candidate scoring.
+
+### 3.7 Re-Planning Module (embedded in `allocation_service.py`)
+- **Responsibility:** Detect trigger events; release invalidated locks; re-execute allocation pipeline; produce new recommendation; notify actors.
+- **Inputs:** Trigger event type and affected resource/request IDs.
+- **Outputs:** New Allocation record; updated AllocationAuditLog; request status back to `PENDING_EVALUATION` or `RE_PLANNING`; WebSocket notification.
+- **Dependencies:** AllocationEngine, RedisLockManager, NotificationService.
+- **Business Rules:** See PRD.md Section 13 for full trigger event list and constraints.
+
+### 3.8 Verification Module (flag management in User/Hospital/BloodBank/Donor models)
+- **Responsibility:** Track and enforce verification status of actors and resources.
+- **Inputs:** Admin sets `is_verified` flag via admin API.
+- **Outputs:** Verified/unverified state on records; filter applied during allocation.
+- **Dependencies:** PostgreSQL (is_verified columns), RBAC (SYSTEM_ADMIN only).
+- **Business Rules:** Unverified donors are excluded from proximity broadcast. Unverified hospitals cannot create requests.
+
+### 3.9 Notification Service (`app/websocket/connection_manager.py`)
+- **Responsibility:** Maintain active WebSocket connections per client; broadcast events to specific roles or individuals.
+- **Inputs:** Event type; target audience (hospital_id, donor_id, blood_bank_id, or role-wide).
+- **Outputs:** WebSocket push messages to connected clients.
+- **Dependencies:** FastAPI WebSocket infrastructure.
+- **Business Rules:** Best-effort delivery. A disconnected client's missed events are not replayed. Future SMS/email integration can be plugged into the notification abstraction layer without changing core allocation logic.
+
+### 3.10 Transportation Estimation
+- **Responsibility:** Estimate travel time between a resource location and the hospital.
+- **Inputs:** Source coordinates (lat, lng); destination coordinates (hospital lat, lng).
+- **Outputs:** Estimated distance (km); estimated transit time (minutes).
+- **Dependencies:** PostGIS `ST_Distance` function.
+- **Business Rules (Implementation Decision):** Travel time estimate = distance_km / assumed_average_speed_kmh. Default assumed speed is configurable. This is a mock estimate for the prototype. A real routing API (e.g., Google Maps, OSRM) can be integrated later by implementing the same interface.
+
+### 3.11 Admin Module (`app/api/v1/admin.py` if implemented, or via coordinator SYSTEM_ADMIN role on existing endpoints)
+- **Responsibility:** System-wide overview; manual allocation overrides; verification management.
+- **Inputs:** Coordinator actions (override, verify actor).
+- **Outputs:** Updated allocation records; system-wide queue state; audit log entries for overrides.
+- **Dependencies:** All modules; RBAC (SYSTEM_ADMIN required).
+
+### 3.12 Audit Module (`app/api/v1/audit.py`)
+- **Responsibility:** Read-only access to AllocationAuditLog records; allocation explanation endpoint.
+- **Inputs:** Request ID (for explanation); pagination params (for audit log list).
+- **Outputs:** AllocationAuditLog records.
+- **Dependencies:** PostgreSQL (allocation_audit_logs table).
+- **Business Rules:** No write or delete operations available via API. Only SYSTEM_ADMIN and HOSPITAL_ADMIN (for own requests) may access.
 
 ---
 
-### 1.3 Core System Components
+## 4. Frontend Architecture
 
-* **Verification & Request Intake**: Validates clinical authenticity, hospital accreditation, patient identification, required blood product components (whole blood, packed RBCs, platelets, plasma), and urgency parameters before admitting requests into the state machine.
-* **Compatibility & Eligibility Filter**: Enforces hard medical constraints, including ABO/Rh(D) cross-match rules, rare antibody flags, component-specific viability rules, donor minimum donation intervals (56 days for whole blood, 14 days for platelets), and age/weight/medication exclusion criteria.
-* **Priority & Urgency Scoring**: Computes real-time dynamic urgency scores ($S_{urgency} \in [0, 100]$) based on clinical triage status (e.g., Massive Transfusion Protocol, scheduled surgical reserve, active trauma), time-to-treatment deadline, condition decay rate, and local supply scarcity.
-* **Allocation/Matching Engine (Core Optimizer)**: Solves a multi-objective optimization problem that balances clinical urgency, real-time proximity/travel-time scores, unit shelf-life (prioritizing older stock before expiry), and donor commitment reliability. When routing to live donors, it dynamically computes a proximity isochrone/geofence and broadcasts simultaneously to **all eligible donors within the proximity boundary** ($D_1, D_2, \dots, D_n$).
-* **Continuous Re-Planning/Re-Optimization Trigger**: Event-driven watchdog that listens for state invalidations (geofence timeout with zero responses, in-transit donor cancellation, transit delay exceeding safety thresholds, inventory lock timeouts) and immediately triggers progressive geofence expansion (e.g., widening search radius from 5 km $\rightarrow$ 15 km) and candidate re-dispatch.
-* **Explainability & Audit Module**: Generates human-readable, deterministic audit trails for every matching decision, detailing constraint satisfaction, score weights, proximity perimeter calculations, and fallback triggers for clinical accountability.
-* **Live Data Layer (Inventory, Requests, Donor Status)**: High-concurrency, transactional data store managing optimistic inventory locks, proximity-zone soft-lock leases, atomic hard-lock upgrades upon first response, donor geo-availability states, and patient queue states.
-* **Notification/Communication Service**: Orchestrates parallel multi-candidate dispatch to all nearby donors in the proximity zone, managing fast first-to-confirm resolution, automated cohort dismissal upon fulfillment, and fallback escalation ladders.
-* **Real-Time Event/Update Layer**: Low-latency WebSocket/SSE pub-sub bus that pushes state transitions, lock upgrades/releases, allocation updates, and telemetry diffs to connected client sessions.
+### 4.1 Overview
+The frontend is built with React 18, TypeScript, and Vite. It connects to the backend via:
+- **REST API** (HTTPS): `http://localhost:8000/api/v1`
+- **WebSocket** (WSS): `ws://localhost:8000/api/v1/realtime/ws`
+
+State management uses React Context or lightweight state (no Redux required for prototype). API calls use the native `fetch` API or `axios`. WebSocket connection is maintained with auto-reconnect.
+
+### 4.2 Role-Specific Dashboards
+
+#### Hospital Dashboard (HOSPITAL_ADMIN)
+**Screens:**
+1. **Emergency Request Intake Screen**
+   - Input: blood group selector, component type, quantity, triage level, deadline datetime picker, patient ID token.
+   - Action: POST /api/v1/requests
+   - On success: redirect to Live Tracking screen.
+
+2. **Live Request Tracking & Allocation View**
+   - Shows: request status pill (PENDING_EVALUATION -> PROXIMITY_ZONE_NOTIFIED -> COMMITTED_IN_TRANSIT, etc.); real-time ETA; matched resource identifier; expandable allocation explanation panel.
+   - Data: GET /api/v1/requests/{id}; GET /api/v1/audit/requests/{id}/explanation; WebSocket live updates.
+   - Action: Cancel request (PATCH /api/v1/requests/{id}/cancel).
+
+#### Blood Bank Dashboard (BLOOD_BANK_STAFF)
+**Screens:**
+1. **Inventory Management Screen**
+   - Shows: table of inventory units with blood group, component type, expiry date, status, lock state.
+   - Actions: Register new unit (POST /api/v1/inventory/units); update unit status (PATCH /api/v1/inventory/units/{id}/status).
+   - Data: GET /api/v1/inventory; WebSocket updates for lock events.
+
+#### Donor Dashboard (DONOR)
+**Screens:**
+1. **Availability & Status Screen**
+   - Shows: availability toggle; donor profile summary; last donation date; reliability score.
+   - Action: PATCH /api/v1/donors/availability (toggle is_available, update location).
+
+2. **Emergency Dispatch Action Screen**
+   - Triggered by: incoming WebSocket dispatch notification.
+   - Shows: hospital name, component needed, distance estimate, response countdown timer.
+   - Actions: Accept (POST /api/v1/donors/requests/{id}/respond with action=ACCEPT); Decline (action=DECLINE).
+   - On Accept (hard lock claimed): shows confirmation; on race condition conflict: shows stand-down message.
+
+#### Coordinator Dashboard (SYSTEM_ADMIN)
+**Screens:**
+1. **Live Queue Monitor**
+   - Shows: all active requests sorted by urgency score; live allocation events feed; re-planning alerts.
+   - Actions: Manual override (POST /api/v1/admin/allocations/{id}/override).
+   - Data: GET /api/v1/admin/overview; GET /api/v1/requests; WebSocket.
+
+2. **Audit & Explainability Screen**
+   - Shows: searchable list of AllocationAuditLog records; full explanation view per decision.
+   - Data: GET /api/v1/audit/logs; GET /api/v1/audit/requests/{id}/explanation.
 
 ---
 
-### 1.4 Data Flow Narrative: Lifecycle of a Request (Proximity-Based Geofence Broadcast & First-Ack Hard Lock)
+## 5. Backend Architecture
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor H as Hospital / Clinician
-    participant Intake as Intake & Verification
-    participant State as Live Data Layer
-    participant Engine as Allocation Engine
-    participant Audit as Explainability Module
-    participant Notif as Notification Service
-    actor D_Pool as All Eligible Donors in Proximity Zone (D1...Dn)
-    actor D_First as First Responding Donor (D2)
-    participant Trigger as Re-Planning Trigger
+The backend is a FastAPI application structured as follows:
 
-    H->>Intake: Submit Critical Request (O-, PRBC, Triage: Trauma Level 1)
-    Intake->>Intake: Validate Hospital Auth & Medical Token
-    Intake->>State: Ingest Request -> Enqueue to Active Demands
-    State->>Engine: Trigger Priority Evaluation & Match Cycle
-    Engine->>Engine: Filter Eligibility & Calculate Urgency Score
-    Engine->>Engine: Solve Allocation: Compute Proximity Scores & Define Tier-1 Geofence (e.g. <= 5km)
-    Engine->>State: Place Soft Locks on All Eligible Donors in Zone [D1...Dn]
-    Engine->>Audit: Generate Proximity Decision Vector & Audit Trail
-    Engine->>Notif: Broadcast Parallel Urgent Alerts to Entire Proximity Zone [D1...Dn]
-    
-    par Parallel Broadcast to All Nearby Donors
-        Notif->>D_Pool: Emergency Dispatch Alert (Proximity <= 5km, TTL: 3m)
-    end
-
-    Note over D_Pool,D_First: Open to All: First verified donor to tap Accept claims the request
-    D_First->>State: First Response Received -> "ACCEPT"
-    State->>State: Atomic Compare-and-Swap: Upgrade D_First to EXCLUSIVE HARD LOCK
-    State->>State: Release Soft Locks on All Other Donors [D1, D3...Dn]
-    
-    par Instant Resolution & Stand-Down
-        State->>Notif: Notify Remaining Donors (D1, D3...Dn) -> "Request Fulfilled by Another Donor" (Greyed Out)
-        State->>H: Push Match Confirmation via WebSocket (Matched: D2, ETA: 8 mins)
-    end
-    State->>Audit: Log Allocation Lock: D2 Committed (First-Ack at +35s)
-
-    Note over D_First,Trigger: Scenario: In-Transit Breakdown / Rejection
-    D_First->>Trigger: In-Transit Cancellation Event: "D2 Transport Failed"
-    Trigger->>State: Release Hard Lock on D2 -> Mark D2 Inactive
-    Trigger->>Engine: Fire Immediate Delta Re-Optimization Loop
-    Engine->>Engine: Expand Geofence (Tier-2: <= 15km) & Select Next Donor Pool [D_expanded]
-    Engine->>State: Acquire Soft Locks on [D_expanded]
-    Engine->>Audit: Append Re-Plan Justification ("D2 In-Transit Failure -> Expanded Geofence")
-    Engine->>Notif: Broadcast Urgent Alerts to [D_expanded]
-    D_Pool->>State: First Response Received from Expanded Zone -> "ACCEPT"
-    State->>State: Atomic Upgrade to EXCLUSIVE HARD LOCK -> Release Other Soft Locks
-    State->>H: Push Re-Plan Update via WebSocket (Matched: D_new, Updated ETA: 14 mins)
+```
+backend/app/
+├── main.py                  # Application entry point, CORS, lifespan, router registration
+├── core/
+│   ├── config.py            # Environment settings (Pydantic Settings)
+│   ├── database.py          # SQLAlchemy async engine, session factory, Base
+│   ├── redis.py             # Async Redis client, ConcurrencyLockManager
+│   ├── security.py          # JWT encode/decode, bcrypt password hash/verify
+│   ├── permissions.py       # RBAC role dependency guards
+│   └── exceptions.py        # DomainException, AllocationRaceConditionError
+├── models/
+│   ├── base.py              # TimestampedModel (id, created_at, updated_at)
+│   ├── user.py              # User model + UserRole enum
+│   ├── hospital.py          # Hospital model with Geography(Point)
+│   ├── blood_bank.py        # BloodBank model with Geography(Point)
+│   ├── donor.py             # Donor model with Geography(Point), reliability_score
+│   ├── inventory.py         # InventoryUnit model, BloodComponentType, UnitStatus
+│   ├── request.py           # BloodRequest model, TriageLevel, RequestStatus
+│   ├── allocation.py        # Allocation model, AllocationSourceType, AllocationStatus
+│   └── audit.py             # AllocationAuditLog model
+├── schemas/
+│   ├── auth.py              # RegisterRequest, LoginRequest, TokenResponse
+│   ├── request.py           # CreateBloodRequestSchema, RequestResponse
+│   ├── donor.py             # DonorProfile, AvailabilityUpdate, DispatchResponse
+│   ├── inventory.py         # CreateInventoryUnit, InventoryUnitResponse, StatusUpdate
+│   └── audit.py             # AllocationExplanationResponse, AuditLogResponse
+├── repositories/
+│   ├── base.py              # GenericAsyncRepository (get, list, create, update)
+│   ├── donor_repo.py        # DonorRepository: find_eligible_donors_in_proximity (ST_DWithin)
+│   └── inventory_repo.py    # InventoryRepository: find_compatible_units_with_lock (FEFO)
+├── services/
+│   ├── matching_service.py  # CompatibilityEngine, urgency scoring, proximity scoring
+│   └── allocation_service.py# AllocationService: pipeline, donor response, re-planning
+├── api/
+│   ├── deps.py              # get_current_user, require_role, get_db, get_redis
+│   └── v1/
+│       ├── router.py        # api_router aggregating all sub-routers
+│       ├── auth.py          # /auth endpoints
+│       ├── requests.py      # /requests endpoints
+│       ├── donors.py        # /donors endpoints
+│       ├── inventory.py     # /inventory endpoints
+│       ├── audit.py         # /audit endpoints
+│       └── admin.py         # /admin endpoints (SYSTEM_ADMIN only)
+└── websocket/
+    ├── connection_manager.py# ConnectionManager: connect, disconnect, broadcast
+    └── routes.py            # /realtime/ws WebSocket upgrade endpoint
 ```
 
-1. **Request Intake & Verification**: A clinician at a certified hospital submits an emergency blood request specifying component type, units required, target patient ABO/Rh profile, and clinical urgency indicator (e.g., Trauma Level 1). The Intake module verifies the clinician's credentials.
-2. **Eligibility Filtering & Urgency Scoring**: The request enters the Priority Queue. The compatibility filter checks all available inventory and donor pools. The Urgency Scorer evaluates patient decay rates and computes a composite urgency index.
-3. **Proximity-Based Geofence & Soft-Locking**: Because local blood bank inventory has no compatible unreserved stock, the optimizer evaluates geographic coordinates, road network travel times, and traffic conditions. It defines a **Tier-1 Proximity Geofence** (e.g., all verified donors within 5 km / 15 minutes travel time) and applies non-exclusive **optimistic soft locks** across all eligible donors in that zone ($D_1, D_2, \dots, D_n$) rather than arbitrarily capping to a fixed small number.
-4. **Parallel Proximity Broadcast**: The Notification Service broadcasts the emergency alert to **all eligible donors within the proximity radius simultaneously** with a short response TTL (e.g., 3 minutes). The request is live and open to all nearby candidates in parallel.
-5. **First-Ack Atomic Hard Lock & Greying Out**: As soon as the *first* nearby donor (e.g., D2) taps **ACCEPT**:
-   - The backend executes an atomic compare-and-swap upgrading D2 to an **Exclusive Hard Lock** (`COMMITTED_ALLOCATION`).
-   - The soft locks on all other nearby donors ($D_1, D_3, \dots, D_n$) are instantly released.
-   - The system immediately pushes an event to everyone else, **greying out the action** with the message *"Request already fulfilled by another nearby donor"*.
-   - The hospital tracking view receives a live confirmation and transit telemetry stream via WebSocket.
-6. **In-Transit Attrition or Zone Timeout**: If the committed donor encounters a breakdown, or if no donor in the Tier-1 radius responds within the 3-minute TTL, the Continuous Re-Planning Trigger immediately fires.
-7. **Progressive Geofence Expansion**: The engine automatically widens the proximity perimeter to Tier-2 (e.g., 15 km / 30 minutes drive-time), identifies all additional verified donors in the expanded radius, and broadcasts in parallel until a first-accept hard lock is secured.
+### Backend Module Summary
+
+| Module | File(s) | Responsibility |
+|:-------|:--------|:---------------|
+| Auth | core/security.py, api/v1/auth.py | Password hashing, JWT, login, register |
+| User | models/user.py, schemas/auth.py | User entity, role enum |
+| Emergency Request | models/request.py, api/v1/requests.py | Request CRUD, urgency score, state machine |
+| Donor | models/donor.py, repositories/donor_repo.py, api/v1/donors.py | Donor profile, proximity query, dispatch response |
+| Blood Bank | models/blood_bank.py, api/v1/* | Blood bank entity management |
+| Inventory | models/inventory.py, repositories/inventory_repo.py, api/v1/inventory.py | Blood unit CRUD, FEFO query, status management |
+| Compatibility | services/matching_service.py | ABO/Rh matrix lookups, urgency formula, proximity score |
+| Allocation | services/allocation_service.py | Full allocation pipeline, scoring, locking, FEFO |
+| Re-planning | services/allocation_service.py (re-plan methods) | Trigger detection, lock release, pipeline re-execution |
+| Verification | models/user.py, models/donor.py, api/v1/admin.py | is_verified flag management, filter enforcement |
+| Notification | websocket/connection_manager.py | WebSocket channel management, broadcast |
+| Transportation | services/matching_service.py (proximity score) | Distance-based travel time mock estimate |
+| Audit | models/audit.py, api/v1/audit.py | Immutable AllocationAuditLog read access |
 
 ---
 
-### 1.5 Key Design Principles
+## 6. Allocation Engine Architecture
 
-* **Distance & Proximity-Based Dynamic Geofencing**: Emergency dispatches are determined by real-world transit time, road networks, and proximity scoring. Alerts are broadcast to all eligible donors within the calculated proximity zone simultaneously rather than restricted to arbitrary fixed candidate counts.
-* **First-Ack Hard Lock with Automatic Stand-Down**: The request is open to the entire proximity zone; the first verified donor to accept claims the exclusive allocation, while the backend atomically dismisses and greys out the notification for all other donors.
-* **Progressive Geofence Escalation & Event-Driven Re-Optimization**: If a proximity tier times out with zero responses or an in-transit donor cancels, the system automatically expands the geographic search perimeter and re-optimizes without manual coordinator delay.
-* **Priority-Queue & Multi-Factor Scoring Model**: Allocation is governed by objective utility functions balancing clinical criticality, biological compatibility, geographic transit latency, resource shelf-life, and donor fulfillment probabilities, eliminating first-come-first-served biases.
-* **Explainability-by-Default**: Every algorithmic decision, candidate cohort ranking, hard-lock transition, and re-planning step produces an immutable, human-interpretable rationale accessible to clinical coordinators and system auditors.
-* **Verification-Before-Trust**: No actor, inventory unit, or request enters the active matching graph without cryptographic identity verification, clinical validation, and compatibility checks.
+This is the most critical technical component.
 
----
+### 6.1 Algorithm Classification
+The allocation engine uses a **heuristic greedy weighted-scoring** approach. It does not claim to find a mathematically globally optimal solution. For each active request, it greedily selects the highest-scored feasible candidate from the available pool at the time of evaluation.
 
-## 2. Backend Architecture
+**Justification:** A heuristic greedy approach is sufficient for the prototype to demonstrate dynamic multi-factor allocation, explainability, and re-planning. It is deterministic, traceable, and computationally lightweight.
 
-### 2.1 Backend Modules & Responsibilities
+### 6.2 Deterministic Allocation Pipeline
 
-| Module | Core Responsibility |
-| :--- | :--- |
-| **Auth & Verification (`auth_verification`)** | Validates hospital licenses, medical staff credentials, donor identities, and issues role-based access tokens. |
-| **Requests Management (`requests_mgr`)** | Manages clinical blood request schemas, lifecycle states, medical urgency flags, and request cancellation/fulfillment. |
-| **Inventory & Blood Bank (`inventory_mgr`)** | Tracks verified on-shelf blood component units, batch numbers, storage conditions, and expiry dates with optimistic concurrency locks. |
-| **Donor Management (`donor_mgr`)** | Maintains donor biological profiles, donation interval eligibility, real-time geo-availability, and reliability scores. |
-| **Allocation & Optimization Engine (`allocation_engine`)** | Core mathematical solver executing compatibility filtering, priority scoring, multi-criteria allocation, and candidate cohort ranking. |
-| **Continuous Re-Planning Trigger (`replan_trigger`)** | Observes operational failures, donor dropouts, cohort timeout expirations, and transit telemetry to trigger targeted delta re-optimizations. |
-| **Explainability & Audit Module (`audit_explainability`)** | Produces deterministic logs, score breakdowns, cohort selection logs, and decision justifications for every allocation and re-plan. |
-| **Notification & Communication (`notification_service`)** | Handles parallel multi-candidate message dispatch, first-ack cohort dismissal, escalation ladders, and delivery tracking. |
-| **Real-Time Sync Layer (`realtime_sync`)** | Maintains WebSocket/SSE connections, broadcasting live queue changes, lock transitions, match events, and tracking telemetry. |
-| **Admin & Coordination Control (`admin_coordination`)** | Provides system-wide observability, emergency manual overrides, parameter calibration, and audit review tools. |
+```
+RECEIVE:  BloodRequest (id, required_blood_group, component_type,
+                        units_requested, triage_level, deadline_at,
+                        hospital.latitude, hospital.longitude)
 
----
+STEP 1: COMPATIBILITY FILTER
+  - is_plasma = (component_type == FFP or CRYOPRECIPITATE)
+  - compatible_groups = MatchingEngineService.get_compatible_donor_types(
+        required_blood_group, is_plasma=is_plasma)
+  Result: list of compatible blood group strings
 
-### 2.2 Route Catalog by Module
+STEP 2: INVENTORY QUERY (FEFO)
+  - Query: inventory_units WHERE
+        blood_group IN (compatible_groups)
+        AND component_type = request.component_type
+        AND status = AVAILABLE
+        AND expiry_date > NOW()
+    ORDER BY expiry_date ASC
+    LIMIT units_requested
+  - If sufficient units found -> proceed to STEP 2a
+  - Else -> proceed to STEP 3 (donor broadcast)
 
-#### 2.2.1 Auth & Verification Module (`auth_verification`)
+STEP 2a: INVENTORY RESERVATION
+  - Acquire Redis soft lock on each selected unit (TTL configured)
+  - Update unit.status = LOCKED_RESERVE, unit.lock_expires_at = now + TTL
+  - Create Allocation record (source_type=BLOOD_BANK_INVENTORY, status=HARD_LOCKED)
+  - Compute proximity_score = MatchingEngineService.compute_proximity_score(
+        blood_bank.distance_to_hospital_km)
+  - Create AllocationAuditLog:
+        decision_type = INVENTORY_MATCH
+        urgency_score = request.calculated_urgency_score
+        candidate_scores_json = {unit_id, expiry_date, proximity_score}
+        rationale_summary = "Inventory match: unit {batch} FEFO selected. ..."
+  - Update request.status = COMMITTED_IN_TRANSIT
+  - Broadcast ALLOCATION_MATCHED notification to hospital
+  DONE.
 
-##### User-Facing Routes
-* `POST /api/v1/auth/login` — Authenticates users (Hospitals, Blood Banks, Donors, Admins) and returns role-based JWTs; called by all client login screens.
-* `POST /api/v1/auth/register` — Registers new donors or medical institutions; called by client registration screens.
-* `GET /api/v1/auth/me` — Fetches current authenticated user profile and verification status; called by all client apps on load.
+STEP 3: DONOR PROXIMITY BROADCAST
+  - Query: donors WHERE
+        blood_group IN (compatible_groups)
+        AND is_available = true
+        AND is_verified = true
+        AND ST_DWithin(location, hospital_location, radius_meters)
+    ORDER BY ST_Distance(location, hospital_location) ASC
+  - If no donors found:
+        Expand radius (Implementation Decision: radius_km * 2, up to configured max)
+        Repeat STEP 3
+        If still none: request.status = RE_PLANNING; notify hospital; DONE.
+  - Apply Redis soft locks to ALL found donors simultaneously (non-exclusive, TTL = 180s)
+  - Create Allocation record per donor (status=SOFT_LOCKED)
+  - Broadcast proximity-zone dispatch notification to ALL found donors simultaneously
+  - Update request.status = PROXIMITY_ZONE_NOTIFIED
+  - Start TTL watchdog (Re-planning engine handles timeout)
+  Wait for first-ack response...
 
-##### Internal / Not Exposed to Client
-* `POST /internal/auth/verify-license` — Validates institutional medical license with national registry service; called by `requests_mgr` and intake pipeline.
-* `POST /internal/auth/validate-token` — Validates internal microservice tokens across backend boundaries; called by API Gateway/service middleware.
+STEP 4: FIRST-ACK HARD LOCK (triggered by donor ACCEPT response)
+  - Redis atomic compare-and-swap: SET request:{id}:hard_lock = donor_id NX EX ttl
+  - If SET succeeds (this donor wins):
+        Upgrade Allocation status -> HARD_LOCKED
+        Release all other donor soft locks
+        Send stand-down notifications to all other zone donors
+        request.status = COMMITTED_IN_TRANSIT
+        Compute distance_km and estimated_transit_minutes
+        Write AllocationAuditLog (decision_type = FIRST_ACK_CLAIM)
+        Broadcast MATCH_CONFIRMED to hospital with donor ETA
+  - If SET fails (another donor already claimed):
+        Return AllocationRaceConditionError to this donor
+        Send stand-down notification to this donor
 
----
+STEP 5: RE-PLANNING (triggered by cancellation, timeout, quarantine, etc.)
+  - Release invalidated lock (Redis + DB status update)
+  - Set Allocation status -> RE_OPTIMIZED or CANCELLED_BY_DONOR or TIMED_OUT
+  - Set request.status -> RE_PLANNING
+  - Broadcast RE_PLANNING notification to hospital
+  - Re-execute from STEP 1 (or STEP 3 with expanded radius if inventory already exhausted)
+  - Write AllocationAuditLog (decision_type = RE_PLAN_ALTERNATIVE)
+```
 
-#### 2.2.2 Requests Management Module (`requests_mgr`)
+### 6.3 Scoring Factors (Implementation Decision)
+The greedy selection within each candidate pool is ordered by these factors:
+- **Inventory candidates:** FEFO (expiry_date ASC) primary; proximity_score secondary.
+- **Donor candidates:** Initial ordering by PostGIS distance ASC; reliability_score used as a secondary sort within equidistant candidates.
 
-##### User-Facing Routes
-* `POST /api/v1/requests` — Creates a verified emergency blood request with clinical urgency parameters; called by Hospital Request Intake screen.
-* `GET /api/v1/requests/{id}` — Retrieves detailed status and matching progress for a specific request; called by Hospital and Coordinator tracking screens.
-* `GET /api/v1/requests` — Lists active and historical requests filtered by hospital/status; called by Hospital and Coordinator dashboard screens.
-* `PATCH /api/v1/requests/{id}/cancel` — Cancels an open blood request when clinical need resolves; called by Hospital Request detail screen.
+> **Implementation Decision:** The exact numeric weights for combining proximity_score and reliability_score into a single composite donor score are defined in `allocation_service.py` and may be tuned without changing the documented architecture. They must be captured in `candidate_scores_json` for every audit log entry.
 
-##### Internal / Not Exposed to Client
-* `POST /internal/requests/{id}/state-transition` — Updates request lifecycle state (e.g., PENDING $\rightarrow$ MATCHED $\rightarrow$ FULFILLED); called by `allocation_engine`.
-* `GET /internal/requests/active-queue` — Returns prioritized active clinical requests requiring allocation; called by `allocation_engine` batch runner.
-
----
-
-#### 2.2.3 Inventory & Blood Bank Module (`inventory_mgr`)
-
-##### User-Facing Routes
-* `GET /api/v1/inventory` — Lists available blood units, component types, and expiry statuses for a blood bank; called by Blood Bank Inventory screen.
-* `POST /api/v1/inventory/units` — Registers new verified blood units into active stock; called by Blood Bank Stock Intake screen.
-* `PATCH /api/v1/inventory/units/{id}/status` — Updates unit status (e.g., in-testing, quarantine, expired); called by Blood Bank Inventory screen.
-
-##### Internal / Not Exposed to Client
-* `POST /internal/inventory/reserve-lock` — Acquires temporary optimistic reservation lock on specific blood units; called by `allocation_engine`.
-* `POST /internal/inventory/release-lock` — Releases reservation lock when allocation fails or expires; called by `replan_trigger`.
-* `POST /internal/inventory/commit-unit` — Permanently deducts reserved units upon dispatch confirmation; called by `allocation_engine`.
-
----
-
-#### 2.2.4 Donor Management Module (`donor_mgr`)
-
-##### User-Facing Routes
-* `PATCH /api/v1/donors/availability` — Toggles donor active status and updates approximate current location; called by Donor App Status screen.
-* `GET /api/v1/donors/requests/active` — Fetches current pending emergency dispatch request assigned to the donor; called by Donor Incoming Request screen.
-* `POST /api/v1/donors/requests/{id}/respond` — Accepts or declines an emergency dispatch assignment (race-to-commit); called by Donor Incoming Request screen.
-
-##### Internal / Not Exposed to Client
-* `GET /internal/donors/proximity-eligible-pool` — Queries all verified donors within the target proximity perimeter matching ABO/interval constraints; called by `allocation_engine`.
-* `POST /internal/donors/zone-soft-locks` — Applies optimistic non-exclusive soft locks across all eligible donors in the proximity zone; called by `allocation_engine`.
-* `POST /internal/donors/{id}/upgrade-hard-lock` — Atomically upgrades first responding donor to exclusive hard lock and frees remaining zone donors; called by `donor_mgr` on respond.
-* `POST /internal/donors/release-zone-locks` — Releases all soft locks on remaining zone donors upon fulfillment or timeout; called by `donor_mgr`.
-* `PATCH /internal/donors/{id}/reliability-score` — Updates donor reliability weighting after accept/decline/timeout events; called by `audit_explainability`.
-
----
-
-#### 2.2.5 Allocation & Optimization Engine (`allocation_engine`)
-
-##### User-Facing Routes
-*(None — The allocation engine is an autonomous backend optimization system with no direct user triggers.)*
-
-##### Internal / Not Exposed to Client
-* `POST /internal/engine/evaluate` — Executes complete optimization run for a given request or active batch; called by `requests_mgr` upon request intake.
-* `POST /internal/engine/allocate-proximity-zone` — Calculates travel-time isochrones, identifies proximity perimeter donors, and triggers zone broadcast; called by `allocation_engine` orchestrator.
-* `GET /internal/engine/queue` — Inspects the internal ranked priority queue of pending allocations; called by system watchdog.
-
----
-
-#### 2.2.6 Continuous Re-Planning Trigger (`replan_trigger`)
-
-##### User-Facing Routes
-*(None — Re-planning triggers execute strictly on internal telemetry and event signals.)*
-
-##### Internal / Not Exposed to Client
-* `POST /internal/replan/trigger` — Ingests cancellation, transit failure, or zone timeout events and triggers geofence expansion; called by `notification_service` & `donor_mgr`.
-* `POST /internal/replan/evaluate-timeouts` — Scans active proximity zone leases and triggers radius expansion if zero responses occur within TTL; called by periodic internal cron worker.
+### 6.4 Explanation Generation
+For every allocation decision:
+1. The allocation pipeline records all evaluated candidates and their computed scores in `candidate_scores_json`.
+2. It generates a natural-language `rationale_summary` string using the actual factor values.
+3. Both are written to `AllocationAuditLog` atomically within the same DB transaction as the Allocation record.
+4. The `/api/v1/audit/requests/{id}/explanation` endpoint retrieves and returns this record.
 
 ---
 
-#### 2.2.7 Explainability & Audit Module (`audit_explainability`)
+## 7. Re-Planning Architecture
 
-##### User-Facing Routes
-* `GET /api/v1/audit/requests/{id}/explanation` — Returns human-readable matching explanation and score breakdown; called by Hospital and Coordinator Explanation view.
-* `GET /api/v1/audit/logs` — Retrieves immutable system-wide allocation decision logs; called by Admin Audit Console.
+Re-planning is event-driven, embedded within the allocation service. The flow is:
 
-##### Internal / Not Exposed to Client
-* `POST /internal/audit/record-decision` — Persists mathematical weights, constraint matrices, and proximity zone rationale for an allocation; called by `allocation_engine`.
-* `POST /internal/audit/record-replan` — Logs re-planning rationale and geofence expansion cause; called by `replan_trigger`.
+```
+EVENT DETECTED
+  (donor cancels / lock TTL expires / unit quarantined / new request / etc.)
+      |
+      v
+IDENTIFY AFFECTED REQUEST(S)
+  - For donor cancel/timeout: request ID from allocation record
+  - For unit status change:   find request with soft lock on this unit
+  - For new high-urgency req: all active requests in PENDING_EVALUATION or RE_PLANNING
+      |
+      v
+RELEASE INVALIDATED RESOURCES
+  - Redis: delete soft lock keys for affected resources
+  - DB:    Allocation.status -> TIMED_OUT / CANCELLED_BY_DONOR / RE_OPTIMIZED
+  - DB:    InventoryUnit.status -> AVAILABLE (if was LOCKED_RESERVE)
+      |
+      v
+SET REQUEST STATUS -> RE_PLANNING
+BROADCAST RE_PLANNING NOTIFICATION to hospital (WebSocket)
+      |
+      v
+RE-EXECUTE ALLOCATION PIPELINE (STEP 1 onwards)
+      |
+      v
+NEW RECOMMENDATION GENERATED
+      |
+      v
+WRITE NEW AllocationAuditLog (decision_type = RE_PLAN_ALTERNATIVE)
+BROADCAST NEW_RECOMMENDATION / ALTERNATIVE_FOUND to hospital
+```
 
----
-
-#### 2.2.8 Notification & Communication Service (`notification_service`)
-
-##### User-Facing Routes
-*(None — Message transmission is pushed directly via outbound network providers and websockets.)*
-
-##### Internal / Not Exposed to Client
-* `POST /internal/notifications/broadcast-proximity-zone` — Triggers parallel high-priority push/SMS alerts to all eligible donors in the proximity perimeter; called by `allocation_engine`.
-* `POST /internal/notifications/dismiss-zone` — Sends stand-down notifications to remaining nearby donors once first donor confirms; called by `donor_mgr`.
-* `POST /internal/notifications/broadcast-update` — Dispatches event payloads to message brokers for client consumption; called by all core modules.
-
----
-
-#### 2.2.9 Real-Time Sync Layer (`realtime_sync`)
-
-##### User-Facing Routes
-* `GET /api/v1/realtime/ws` — WebSocket upgrade endpoint establishing live bidirectional event connection; called by all active frontend clients.
-
-##### Internal / Not Exposed to Client
-* `POST /internal/realtime/publish` — Ingests state diff events and broadcasts to relevant channel subscribers; called by backend services.
-
----
-
-#### 2.2.10 Admin & Coordination Control Module (`admin_coordination`)
-
-##### User-Facing Routes
-* `GET /api/v1/admin/overview` — Fetches global network metrics, active allocations, and bottleneck alerts; called by Coordinator Dashboard.
-* `POST /api/v1/admin/allocations/{id}/override` — Manually overrides or re-routes an algorithmic match under exceptional conditions; called by Coordinator Override screen.
-
-##### Internal / Not Exposed to Client
-* `POST /internal/admin/recalibrate-weights` — Updates urgency and scoring coefficient weights at runtime; called by system administrator scripts.
+**Radius Expansion Logic (Implementation Decision):**
+- Initial search radius: configurable (default 5 km).
+- First expansion: 2x initial radius.
+- Second expansion: 3x initial radius, up to a configured maximum.
+- If maximum radius reached with no candidates: request stays in `RE_PLANNING`, hospital is notified.
 
 ---
 
-## 3. Frontend Architecture
+## 8. Real-Time Architecture
 
-### 3.1 Overview & Guiding Principle
-The frontend interface is strictly functional, minimal, and reactive. Its sole architectural objective is to demonstrate the end-to-end cycle: **Request Intake $\rightarrow$ Parallel Cohort Dispatch $\rightarrow$ First-Ack Hard Lock $\rightarrow$ Live Explanation $\rightarrow$ In-Transit Attrition $\rightarrow$ Automated Delta Re-Plan**. There are no extraneous profile editors, cosmetic settings, or non-essential visual dashboards. All views use plain, high-clarity forms and live-updating data lists connected via WebSocket to demonstrate engine state transitions in real time.
+### 8.1 Technology
+Real-time updates are delivered via **native FastAPI WebSocket connections** managed by a `ConnectionManager` class. This technology is used because:
+- It is built into the FastAPI/uvicorn stack with no additional dependencies.
+- It provides full-duplex communication suitable for push notifications.
+- It is straightforward to demonstrate in a prototype.
 
----
+### 8.2 Connection Lifecycle
+1. Client connects to `ws://host/api/v1/realtime/ws` with a valid JWT in the query string or headers.
+2. `ConnectionManager.connect()` stores the connection indexed by `user_id` and `role`.
+3. Backend services call `ConnectionManager.broadcast_to_user(user_id, message)` or `ConnectionManager.broadcast_to_role(role, message)` to push events.
+4. On disconnect, the connection is removed from the manager.
 
-### 3.2 Role-Based Screen Specifications
+### 8.3 Message Format (Implementation Decision)
+```json
+{
+  "event_type": "ALLOCATION_MATCHED | PROXIMITY_ZONE_NOTIFIED | RE_PLANNING | ...",
+  "request_id": "uuid",
+  "payload": { ... event-specific data ... },
+  "timestamp": "ISO8601"
+}
+```
 
-#### 3.2.1 Patient / Hospital Role
-
-##### 1. Emergency Request Intake Screen
-* **Purpose**: Allows authorized clinical staff to formulate and submit time-critical blood requests.
-* **Core Features & Actions**:
-  * Input patient ABO/Rh(D) blood group, component type (Whole Blood, PRBC, Platelets, FFP), and required unit count.
-  * Select clinical urgency level (Massive Transfusion Protocol, Immediate Trauma, Scheduled Emergency Reserve) and deadline timestamp.
-  * Submit request and immediately receive verified tracking token.
-* **Invoked User-Facing Routes**:
-  * `POST /api/v1/requests`
-
-##### 2. Live Request Tracking & Allocation View
-* **Purpose**: Displays real-time allocation status, candidate cohort dispatch stage, first-ack committed donor, transit state, and re-planning alerts.
-* **Core Features & Actions**:
-  * Live status pill showing lifecycle state (`PENDING_EVALUATION`, `COHORT_NOTIFIED`, `COMMITTED_IN_TRANSIT`, `RE_PLANNING`, `FULFILLED`).
-  * Real-time ETA, matched blood bank/donor identifier, and transit tracker updated via WebSocket.
-  * Expandable "Decision Rationale" panel showing why the candidate cohort and committed resource were chosen.
-  * Emergency cancellation button to abort request if patient condition stabilizes.
-* **Invoked User-Facing Routes**:
-  * `GET /api/v1/requests/{id}`
-  * `GET /api/v1/audit/requests/{id}/explanation`
-  * `PATCH /api/v1/requests/{id}/cancel`
-  * `GET /api/v1/realtime/ws`
+### 8.4 Limitations
+- WebSocket events are best-effort. Missed events (due to disconnect) are not replayed from a persistent queue.
+- No external message broker (Redis Pub/Sub, Kafka, etc.) is used in the prototype. For production scale, the connection manager can be backed by Redis Pub/Sub to support multiple backend instances.
 
 ---
 
-#### 3.2.2 Blood Bank Role
+## 9. Database Architecture
 
-##### 1. Inventory & Reserve Management Screen
-* **Purpose**: Allows blood bank technicians to log stock and inspect real-time unit locks placed by the engine.
-* **Core Features & Actions**:
-  * Data table of on-shelf blood units categorized by type, component, volume, expiration date, and reservation state (`AVAILABLE`, `LOCKED_RESERVE`, `DISPATCHED`).
-  * Direct form to record newly verified donor blood units into active inventory.
-  * Action to mark damaged, expired, or quarantined units.
-* **Invoked User-Facing Routes**:
-  * `GET /api/v1/inventory`
-  * `POST /api/v1/inventory/units`
-  * `PATCH /api/v1/inventory/units/{id}/status`
-  * `GET /api/v1/realtime/ws`
+### 9.1 Technology
+PostgreSQL 16 with PostGIS 3.4 extension. PostGIS is required for:
+- `Geography(Point, SRID=4326)` columns on Hospital, BloodBank, and Donor tables.
+- `ST_DWithin()` for proximity radius queries.
+- `ST_Distance()` for distance calculations.
+
+ORM: SQLAlchemy 2.0 (async, using `asyncpg` driver). Migrations: Alembic.
+
+### 9.2 Table Definitions
+
+**users**
+```
+id              VARCHAR PRIMARY KEY
+email           VARCHAR UNIQUE NOT NULL
+hashed_password VARCHAR NOT NULL
+role            ENUM(HOSPITAL_ADMIN, BLOOD_BANK_STAFF, DONOR, SYSTEM_ADMIN) NOT NULL
+is_active       BOOLEAN DEFAULT TRUE
+is_verified     BOOLEAN DEFAULT FALSE
+created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+updated_at      TIMESTAMPTZ
+```
+
+**hospitals**
+```
+id              VARCHAR PRIMARY KEY
+user_id         VARCHAR FK -> users.id ON DELETE CASCADE UNIQUE
+name            VARCHAR NOT NULL
+address         VARCHAR
+contact_phone   VARCHAR
+latitude        FLOAT
+longitude       FLOAT
+location        GEOGRAPHY(POINT, 4326)
+is_verified     BOOLEAN DEFAULT FALSE
+created_at      TIMESTAMPTZ
+updated_at      TIMESTAMPTZ
+```
+
+**blood_banks**
+```
+id              VARCHAR PRIMARY KEY
+user_id         VARCHAR FK -> users.id ON DELETE CASCADE UNIQUE
+name            VARCHAR NOT NULL
+address         VARCHAR
+contact_phone   VARCHAR
+latitude        FLOAT
+longitude       FLOAT
+location        GEOGRAPHY(POINT, 4326)
+is_verified     BOOLEAN DEFAULT FALSE
+created_at      TIMESTAMPTZ
+updated_at      TIMESTAMPTZ
+```
+
+**donors**
+```
+id                        VARCHAR PRIMARY KEY
+user_id                   VARCHAR FK -> users.id ON DELETE CASCADE UNIQUE
+blood_group               VARCHAR NOT NULL INDEX
+date_of_birth             DATE NOT NULL
+weight_kg                 FLOAT NOT NULL
+last_donation_date        DATE
+is_available              BOOLEAN DEFAULT TRUE INDEX
+reliability_score         FLOAT DEFAULT 1.0
+total_successful_donations INTEGER DEFAULT 0
+location                  GEOGRAPHY(POINT, 4326)
+latitude                  FLOAT
+longitude                 FLOAT
+created_at                TIMESTAMPTZ
+updated_at                TIMESTAMPTZ
+```
+
+**inventory_units**
+```
+id              VARCHAR PRIMARY KEY
+blood_bank_id   VARCHAR FK -> blood_banks.id ON DELETE CASCADE
+batch_number    VARCHAR UNIQUE NOT NULL INDEX
+blood_group     VARCHAR NOT NULL INDEX
+component_type  ENUM(WHOLE_BLOOD, PRBC, PLATELETS, FFP, CRYOPRECIPITATE) NOT NULL
+volume_ml       FLOAT NOT NULL DEFAULT 450.0
+collection_date TIMESTAMPTZ NOT NULL
+expiry_date     TIMESTAMPTZ NOT NULL INDEX
+status          ENUM(AVAILABLE, LOCKED_RESERVE, DISPATCHED, TRANSFUSED, EXPIRED, QUARANTINED)
+                DEFAULT AVAILABLE INDEX
+lock_expires_at TIMESTAMPTZ
+created_at      TIMESTAMPTZ
+updated_at      TIMESTAMPTZ
+```
+
+**blood_requests**
+```
+id                       VARCHAR PRIMARY KEY
+hospital_id              VARCHAR FK -> hospitals.id ON DELETE CASCADE
+patient_id_token         VARCHAR NOT NULL INDEX
+required_blood_group     VARCHAR NOT NULL INDEX
+component_type           ENUM(...) NOT NULL
+units_requested          INTEGER NOT NULL DEFAULT 1
+triage_level             ENUM(MASSIVE_TRANSFUSION_PROTOCOL, ACTIVE_TRAUMA,
+                              SCHEDULED_EMERGENCY_RESERVE, ROUTINE_CLINICAL) NOT NULL
+calculated_urgency_score FLOAT DEFAULT 0.0
+deadline_at              TIMESTAMPTZ NOT NULL
+status                   ENUM(PENDING_EVALUATION, PROXIMITY_ZONE_NOTIFIED,
+                              COMMITTED_IN_TRANSIT, RE_PLANNING,
+                              FULFILLED, CANCELLED, EXPIRED)
+                         DEFAULT PENDING_EVALUATION INDEX
+created_at               TIMESTAMPTZ
+updated_at               TIMESTAMPTZ
+```
+
+**allocations**
+```
+id                       VARCHAR PRIMARY KEY
+request_id               VARCHAR FK -> blood_requests.id ON DELETE CASCADE
+source_type              ENUM(BLOOD_BANK_INVENTORY, LIVE_DONOR) NOT NULL
+inventory_unit_id        VARCHAR FK -> inventory_units.id NULLABLE
+donor_id                 VARCHAR FK -> donors.id NULLABLE
+status                   ENUM(SOFT_LOCKED, HARD_LOCKED, IN_TRANSIT, COMPLETED,
+                              CANCELLED_BY_DONOR, TIMED_OUT, RE_OPTIMIZED)
+                         DEFAULT SOFT_LOCKED INDEX
+estimated_transit_minutes FLOAT
+distance_km              FLOAT
+allocated_at             TIMESTAMPTZ
+completed_at             TIMESTAMPTZ
+created_at               TIMESTAMPTZ
+updated_at               TIMESTAMPTZ
+```
+
+**allocation_audit_logs**
+```
+id                    VARCHAR PRIMARY KEY
+request_id            VARCHAR FK -> blood_requests.id
+decision_type         VARCHAR NOT NULL
+urgency_score         FLOAT
+candidate_scores_json JSONB
+selected_resource_id  VARCHAR
+rationale_summary     TEXT
+created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- NO updated_at: immutable record
+```
+
+### 9.3 Key Relationships
+- User 1:1 Hospital (or BloodBank, or Donor) — role determines which profile exists.
+- Hospital 1:N BloodRequest.
+- BloodBank 1:N InventoryUnit.
+- BloodRequest 1:N Allocation (multiple allocation attempts over re-planning cycles).
+- BloodRequest 1:N AllocationAuditLog (one entry per allocation decision).
+- Allocation N:1 InventoryUnit (nullable) or Donor (nullable).
+
+### 9.4 Spatial Indexes
+PostGIS GIST spatial indexes are created on `donors.location`, `hospitals.location`, and `blood_banks.location` to support efficient `ST_DWithin` queries.
 
 ---
 
-#### 3.2.3 Donor Role
+## 10. State Machines
 
-##### 1. Donor Availability & Status Screen
-* **Purpose**: Allows verified donors to toggle their readiness and stream geographic updates for local emergency dispatch.
-* **Core Features & Actions**:
-  * Single master toggle: `Active & Available for Dispatch` vs. `Unavailable`.
-  * Display donation eligibility countdown (days remaining until safe to donate).
-  * Update current location radius / GPS coordinate ping.
-* **Invoked User-Facing Routes**:
-  * `GET /api/v1/auth/me`
-  * `PATCH /api/v1/donors/availability`
+### 10.1 EmergencyRequest (BloodRequest) States
 
-##### 2. Emergency Dispatch Action Screen
-* **Purpose**: Modal/Screen displaying an incoming targeted blood request requiring immediate response (proximity-zone broadcast).
-* **Core Features & Actions**:
-  * Displays critical dispatch details: target hospital, component requested, travel distance/ETA, and response countdown timer (e.g., 3-minute TTL).
-  * Prominent **Accept** button (race-to-commit: locks donor if first to respond, or greys out with "Fulfilled by another nearby donor" if already claimed).
-  * Prominent **Decline** button (releases candidate's soft lock).
-* **Invoked User-Facing Routes**:
-  * `GET /api/v1/donors/requests/active`
-  * `POST /api/v1/donors/requests/{id}/respond`
-  * `GET /api/v1/realtime/ws`
+```
+                    [Created]
+                       |
+                       v
+              PENDING_EVALUATION
+              /                 \
+  Inventory found            Inventory depleted,
+  (hard lock placed)          donor broadcast sent
+             |                       |
+             v                       v
+  COMMITTED_IN_TRANSIT   PROXIMITY_ZONE_NOTIFIED
+             |                       |
+             |         First donor accepts (hard lock)
+             |                       |
+             v                       v
+         FULFILLED <-- COMMITTED_IN_TRANSIT
+             
+  From any non-terminal state:
+  - Hospital cancels -> CANCELLED
+  - Deadline passes without fulfilment -> EXPIRED
+  - Resource fails / timeout -> RE_PLANNING
+        |
+        v
+     RE_PLANNING
+        |
+        v (re-execute pipeline)
+  PENDING_EVALUATION (or directly to PROXIMITY_ZONE_NOTIFIED / COMMITTED_IN_TRANSIT)
+```
+
+**Terminal states:** FULFILLED, CANCELLED, EXPIRED.
+
+### 10.2 InventoryUnit States
+
+```
+AVAILABLE
+    |
+    | (allocation engine soft lock)
+    v
+LOCKED_RESERVE
+    |          \
+    | (confirm)  (TTL expires or request cancelled)
+    v              \
+DISPATCHED        AVAILABLE (lock released)
+    |
+    v
+TRANSFUSED
+
+From any non-terminal state:
+    -> EXPIRED   (expiry_date passed)
+    -> QUARANTINED (blood bank staff marks it)
+```
+
+**Terminal states:** TRANSFUSED, EXPIRED, QUARANTINED.
+
+### 10.3 Allocation States
+
+```
+SOFT_LOCKED
+    |           \
+    | (first-ack  (TTL expires or all donors decline)
+    |  donor)       \
+    v                v
+HARD_LOCKED       TIMED_OUT
+    |
+    | (donor signals in-transit or delivery confirmed)
+    v
+IN_TRANSIT
+    |          \
+    | (success) (donor cancels)
+    v              \
+COMPLETED       CANCELLED_BY_DONOR -> triggers RE_PLANNING on request
+                    |
+                    v
+                RE_OPTIMIZED
+```
+
+**Terminal states:** COMPLETED, TIMED_OUT, RE_OPTIMIZED.
 
 ---
 
-#### 3.2.4 Admin / Authorized Coordinator Role
+## 11. Consistency and Concurrency
 
-##### 1. Coordination & Live Queue Monitor
-* **Purpose**: Provides high-level visibility over the global priority queue, active allocations, proximity broadcast metrics, and re-planning frequency.
-* **Core Features & Actions**:
-  * Unified live queue of all active hospital requests sorted strictly by computed priority score.
-  * Real-time alert feed displaying proximity broadcast and re-planning events (e.g., "Request #104: Tier-1 Zone [5km] broadcasted $\rightarrow$ D2 Hard-Locked in 35s").
-  * Manual override trigger to re-assign or re-prioritize allocations during disaster management protocols.
-* **Invoked User-Facing Routes**:
-  * `GET /api/v1/admin/overview`
-  * `GET /api/v1/requests`
-  * `POST /api/v1/admin/allocations/{id}/override`
-  * `GET /api/v1/realtime/ws`
+### 11.1 Race Condition Scenario
+Two donors (D1 and D2) in the same proximity zone simultaneously tap ACCEPT for Request R. Without protection, both could create an Allocation record, leading to double-allocation.
 
-##### 2. Explainability & Audit Log Screen
-* **Purpose**: Inspects mathematical criteria and deterministic audit trails for any historical or active allocation decision.
-* **Core Features & Actions**:
-  * Searchable list of all allocation decision vectors, proximity perimeter calculations, and re-plan triggers.
-  * Score inspection view displaying weighted sub-scores (Urgency, Distance, Expiry, Reliability) and constraint pass/fail matrix.
-* **Invoked User-Facing Routes**:
-  * `GET /api/v1/audit/logs`
-  * `GET /api/v1/audit/requests/{id}/explanation`
+### 11.2 Solution: Redis Atomic Compare-And-Swap
+The `ConcurrencyLockManager` in `app/core/redis.py` uses Redis `SET NX EX` (Set if Not eXists, with expiry):
+
+```python
+# acquire_hard_lock(request_id, donor_id):
+result = await redis.set(
+    f"hardlock:request:{request_id}",
+    donor_id,
+    nx=True,          # Only set if key does not exist
+    ex=ttl_seconds    # Auto-expire to prevent permanent lock on failure
+)
+# If result is True: this donor wins. Others get False -> AllocationRaceConditionError.
+```
+
+### 11.3 Soft Locks
+Soft locks are non-exclusive Redis keys per donor-request pair:
+```
+softlock:donor:{donor_id}:request:{request_id}  TTL=180s
+```
+Multiple soft locks can coexist. They are released when a hard lock is claimed or the request is cancelled.
+
+### 11.4 Database Transactions
+All writes within the allocation pipeline (Allocation record + AllocationAuditLog + BloodRequest status update + InventoryUnit status update) are wrapped in a single SQLAlchemy async transaction. On commit failure, the entire set rolls back and the pipeline returns an error.
+
+### 11.5 Idempotency
+The allocation pipeline checks whether a hard lock already exists in Redis before creating a new Allocation record. If a hard lock already exists for the request, the pipeline short-circuits and returns the existing allocation.
+
+### 11.6 Stale Lock Detection
+The `lock_expires_at` column on `InventoryUnit` is checked during availability queries. Units where `lock_expires_at < NOW()` but status is still `LOCKED_RESERVE` are treated as available and their status is reset.
 
 ---
 
-### 3.3 Role vs. Feature vs. Route Matrix
+## 12. Security Architecture
 
-| Role | Screen | Core Features / Actions | User-Facing Backend Routes |
-| :--- | :--- | :--- | :--- |
-| **Hospital** | Request Intake | Submit urgency, component, patient blood group, unit count | `POST /api/v1/requests` |
-| **Hospital** | Live Tracking & Allocation | Track match state, view proximity zone dispatch status, inspect explanation, cancel request | `GET /api/v1/requests/{id}`<br>`GET /api/v1/audit/requests/{id}/explanation`<br>`PATCH /api/v1/requests/{id}/cancel`<br>`GET /api/v1/realtime/ws` |
-| **Blood Bank** | Inventory & Reserve | Log new units, view locked reserves, update unit statuses | `GET /api/v1/inventory`<br>`POST /api/v1/inventory/units`<br>`PATCH /api/v1/inventory/units/{id}/status`<br>`GET /api/v1/realtime/ws` |
-| **Donor** | Availability Status | Toggle active state, view interval countdown, ping location | `GET /api/v1/auth/me`<br>`PATCH /api/v1/donors/availability` |
-| **Donor** | Emergency Dispatch | View dispatch request, accept (race-to-commit), decline (release soft lock) | `GET /api/v1/donors/requests/active`<br>`POST /api/v1/donors/requests/{id}/respond`<br>`GET /api/v1/realtime/ws` |
-| **Coordinator** | Live Queue Monitor | View priority queue, monitor proximity zone dispatches & re-plans, execute emergency overrides | `GET /api/v1/admin/overview`<br>`GET /api/v1/requests`<br>`POST /api/v1/admin/allocations/{id}/override`<br>`GET /api/v1/realtime/ws` |
-| **Coordinator** | Audit & Explainability | Inspect decision vectors, audit score breakdowns, review geofence & re-plan logs | `GET /api/v1/audit/logs`<br>`GET /api/v1/audit/requests/{id}/explanation` |
+### 12.1 Authentication
+- **Mechanism:** OAuth2 Password Flow with JWT Bearer tokens.
+- **Token Content:** `user_id`, `role`, `exp` (expiry timestamp).
+- **Token Signing:** HS256 with a secret key loaded from environment variable `SECRET_KEY`.
+- **Expiry:** Configurable via `ACCESS_TOKEN_EXPIRE_MINUTES` env var.
 
+### 12.2 Authorization (RBAC)
+- Every protected endpoint declares required roles via FastAPI dependency: `require_role([UserRole.HOSPITAL_ADMIN])`.
+- Roles are enforced at the API layer before any service logic executes.
+- Object-level authorization (hospital can only see its own requests) is enforced within the service/repository layer by filtering on `hospital_id`.
+
+### 12.3 Input Validation
+- All request bodies are validated via Pydantic v2 schemas before the route handler executes.
+- Invalid types, missing required fields, out-of-range values, and invalid enum values return HTTP 422 with structured error details.
+
+### 12.4 Password Handling
+- Registration: password is immediately hashed with `passlib.bcrypt`. Plaintext is discarded.
+- Login: provided password is verified against the stored hash using `passlib.verify`. Plaintext is never logged.
+- Reset/change: not implemented in prototype (Implementation Decision).
+
+### 12.5 API Security
+- CORS is configured via FastAPI middleware. Origins are set from environment variables.
+- Rate limiting: not implemented in prototype (Implementation Decision — can be added via a middleware layer).
+
+### 12.6 Audit Logging
+- All allocation decisions and critical state changes are persisted to `allocation_audit_logs`.
+- Audit records have no update or delete API endpoints.
+- SYSTEM_ADMIN and HOSPITAL_ADMIN (for own requests) can read audit logs.
+
+### 12.7 Sensitive Data Minimisation
+- `patient_id_token` is an opaque token — the system does not validate or process it as real PII.
+- Donor latitude/longitude is used only for proximity calculations; full coordinates are not returned to hospital-role API responses.
+
+---
+
+## 13. Privacy
+
+- The prototype uses **synthetic data only**. No real patient, donor, or hospital data is used.
+- Donor location data is stored and queried server-side. The exact coordinates are not returned to hospital users via any API endpoint.
+- The `patient_id_token` field stores an opaque identifier supplied by the hospital; the system treats it as an opaque string.
+- No third-party analytics or telemetry services are used.
+
+---
+
+## 14. Failure Handling
+
+| Failure Scenario | Detection | System Response | User-Visible Effect |
+|:-----------------|:----------|:----------------|:--------------------|
+| Database unavailable at startup | SQLAlchemy connect error in lifespan | Warning logged; startup continues in degraded mode | API returns 503 on DB-dependent endpoints |
+| Redis unavailable | redis.py connection error | AllocationRaceConditionError raised | API returns 503 for allocation endpoints; soft/hard lock operations fail |
+| Duplicate allocation attempt (race) | Redis SET NX returns False | AllocationRaceConditionError raised; HTTP 409 to second donor | Second donor sees "Request already claimed" message |
+| Notification WebSocket failure | asyncio exception on send | Exception caught; log error; continue | Client misses this push event; state is still correct in DB |
+| Invalid request payload | Pydantic validation failure | HTTP 422 returned immediately | User sees field-level validation errors |
+| Stale inventory lock (lock_expires_at < NOW) | Detected in inventory query | Unit status reset to AVAILABLE; included in fresh query | Transparent; unit becomes available again |
+| Donor soft lock TTL expires | Redis key expires | Re-planning trigger fires for affected requests | Hospital notified of re-planning |
+| No compatible resource found | Empty candidate pool after radius expansion | Request set to RE_PLANNING | Hospital receives "no compatible resource found" notification |
+| Concurrent DB write conflict | SQLAlchemy asyncpg exception | Transaction rolled back; error returned to caller | API returns 500; client can retry |
+
+---
+
+## 15. Observability
+
+### 15.1 Application Logs
+- Structured log events at INFO level for: request lifecycle transitions, allocation pipeline start/end, lock acquisitions/releases, re-planning triggers.
+- ERROR level for: unhandled exceptions, Redis failures, database errors.
+- Logger name: `smartblood`.
+
+### 15.2 Audit Events
+- All allocation decisions persisted to `allocation_audit_logs` table (PostgreSQL).
+- Accessible via `/api/v1/audit/logs` (SYSTEM_ADMIN) and `/api/v1/audit/requests/{id}/explanation` (Hospital + Admin).
+
+### 15.3 Allocation Decision Tracing
+- Every call to `execute_allocation_pipeline()` writes an `AllocationAuditLog` record regardless of outcome (success, partial, or no candidates).
+
+### 15.4 Performance Measurement (Implementation Decision)
+- FastAPI middleware can be added to log request duration per endpoint.
+- No external APM tool is required for the prototype.
+
+### 15.5 Health Check
+- `GET /health` endpoint returns `{"status": "healthy", "service": "...", "environment": "..."}`.
+- Used for Docker health checks and manual verification.
