@@ -5,8 +5,9 @@ from sqlalchemy import select, and_
 from app.core.database import get_db
 from app.models.user import User
 from app.models.blood_bank import BloodBank
+from app.models.hospital import Hospital
 from app.models.inventory import InventoryUnit, UnitStatus
-from app.models.allocation import Allocation, AllocationStatus
+from app.models.allocation import Allocation, AllocationStatus, AllocationSourceType
 from app.models.request import BloodRequest, RequestStatus
 from app.schemas.inventory import InventoryUnitCreate, InventoryUnitUpdateStatus, InventoryUnitOut
 from app.api.deps import get_current_user
@@ -151,3 +152,104 @@ async def update_unit_status(
             )
 
     return InventoryUnitOut.model_validate(unit)
+
+
+@router.get("/orders")
+async def list_incoming_hospital_orders(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """[USER-FACING] List emergency blood orders routed from hospitals to this blood bank."""
+    res = await db.execute(select(BloodBank).where(BloodBank.user_id == current_user.id))
+    bank = res.scalars().first()
+    bank_id = bank.id if bank else None
+
+    # Query allocations that have matched inventory units
+    alloc_query = (
+        select(Allocation, BloodRequest, Hospital, InventoryUnit)
+        .join(BloodRequest, Allocation.request_id == BloodRequest.id)
+        .join(Hospital, BloodRequest.hospital_id == Hospital.id)
+        .join(InventoryUnit, Allocation.inventory_unit_id == InventoryUnit.id)
+    )
+    if bank_id:
+        alloc_query = alloc_query.where(InventoryUnit.blood_bank_id == bank_id)
+
+    results = (await db.execute(alloc_query)).all()
+
+    # Group by request_id
+    orders_map = {}
+    for alloc, req, hosp, unit in results:
+        if req.id not in orders_map:
+            orders_map[req.id] = {
+                "request_id": req.id,
+                "hospital_name": hosp.name,
+                "hospital_address": hosp.address,
+                "patient_id_token": req.patient_id_token,
+                "required_blood_group": req.required_blood_group,
+                "component_type": req.component_type.value,
+                "units_requested": req.units_requested,
+                "triage_level": req.triage_level.value,
+                "calculated_urgency_score": req.calculated_urgency_score,
+                "status": req.status.value,
+                "created_at": req.created_at.isoformat() if hasattr(req.created_at, "isoformat") else str(req.created_at),
+                "allocated_units": []
+            }
+        orders_map[req.id]["allocated_units"].append({
+            "unit_id": unit.id,
+            "batch_number": unit.batch_number,
+            "blood_group": unit.blood_group,
+            "unit_status": unit.status.value,
+            "allocation_status": alloc.status.value,
+            "allocation_id": alloc.id
+        })
+
+    return list(orders_map.values())
+
+
+@router.post("/orders/{request_id}/dispatch")
+async def dispatch_hospital_order(
+    request_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """[USER-FACING] Blood Bank Staff confirms packing and dispatches blood packs to hospital courier."""
+    alloc_res = await db.execute(
+        select(Allocation, InventoryUnit)
+        .join(InventoryUnit, Allocation.inventory_unit_id == InventoryUnit.id)
+        .where(
+            and_(
+                Allocation.request_id == request_id,
+                Allocation.source_type == AllocationSourceType.BLOOD_BANK_INVENTORY
+            )
+        )
+    )
+    pairs = alloc_res.all()
+    if not pairs:
+        raise HTTPException(status_code=404, detail="No inventory allocations found for this request")
+
+    batches_dispatched = []
+    for alloc, unit in pairs:
+        if unit.status == UnitStatus.LOCKED_RESERVE:
+            unit.status = UnitStatus.DISPATCHED
+            alloc.status = AllocationStatus.IN_TRANSIT
+            batches_dispatched.append(unit.batch_number)
+
+    await db.commit()
+
+    req = await db.get(BloodRequest, request_id)
+    hosp = await db.get(Hospital, req.hospital_id) if req else None
+
+    await manager.broadcast({
+        "type": "BLOOD_BANK_DISPATCHED",
+        "request_id": request_id,
+        "hospital_name": hosp.name if hosp else "Hospital",
+        "batches": batches_dispatched,
+        "status": "DISPATCHED",
+        "message": f"Blood Bank has packed and dispatched batch(es) {', '.join(batches_dispatched)} to {hosp.name if hosp else 'Hospital'}!"
+    })
+
+    return {
+        "status": "DISPATCHED_TO_COURIER",
+        "request_id": request_id,
+        "batches": batches_dispatched
+    }
