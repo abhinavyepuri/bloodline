@@ -1,7 +1,10 @@
 import os
 from typing import List, Union
-from pydantic import AnyHttpUrl, field_validator
+from pydantic import AnyHttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Development-only default. Refused outside development (see _require_real_secret).
+DEV_SECRET_KEY = "development-secret-key-change-in-production-minimum-32-characters"
 
 
 class Settings(BaseSettings):
@@ -9,13 +12,14 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = True
     ENVIRONMENT: str = "development"
-    
+
     # Security
-    SECRET_KEY: str = "development-secret-key-change-in-production-minimum-32-characters"
+    SECRET_KEY: str = DEV_SECRET_KEY
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
 
-    # CORS
+    # CORS — comma-separated in the environment, e.g.
+    #   BACKEND_CORS_ORIGINS="https://app.example.org,https://admin.example.org"
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:5173",
@@ -23,6 +27,32 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://10.0.2.2:8000",  # Android emulator default host loopback
     ]
+
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        """Accept either a JSON list or a comma-separated string."""
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            if v.lstrip().startswith("["):
+                import json
+
+                return json.loads(v)
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
+
+    @model_validator(mode="after")
+    def _require_real_secret(self) -> "Settings":
+        """A shipped default signing key is only acceptable in development."""
+        if self.ENVIRONMENT.lower() not in ("development", "dev", "test"):
+            if self.SECRET_KEY == DEV_SECRET_KEY or len(self.SECRET_KEY) < 32:
+                raise ValueError(
+                    "SECRET_KEY must be set to a unique value of at least 32 characters "
+                    f"when ENVIRONMENT={self.ENVIRONMENT!r}. Generate one with "
+                    "'python -c \"import secrets; print(secrets.token_urlsafe(48))\"'."
+                )
+        return self
 
     # Database (PostgreSQL + PostGIS)
     POSTGRES_SERVER: str = "localhost"

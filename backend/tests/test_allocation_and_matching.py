@@ -1,10 +1,12 @@
 import pytest
 from datetime import datetime, timezone, timedelta
+from sqlalchemy import select
+
+from app.models.hospital import Hospital
 from app.models.request import TriageLevel, BloodRequest, RequestStatus
-from app.models.inventory import BloodComponentType, UnitStatus
+from app.models.inventory import BloodComponentType
 from app.services.matching_service import MatchingEngineService
 from app.services.allocation_service import AllocationService
-from app.core.database import AsyncSessionLocal
 
 
 def test_rbc_compatibility_matrix():
@@ -50,37 +52,31 @@ def test_proximity_score():
 
 
 @pytest.mark.asyncio
-async def test_allocation_pipeline_seeded_data():
-    """Verify that seeded data executes the exact Section 14 scenario."""
-    from app.models.hospital import Hospital
-    from sqlalchemy import select
+async def test_allocation_pipeline_seeded_data(db, seeded):
+    """
+    The seeded Section 14 scenario: two O- PRBC units on the shelf, a 2-unit MTP request.
+    """
+    hosp = (await db.execute(select(Hospital))).scalars().first()
+    assert hosp is not None
 
-    async with AsyncSessionLocal() as db:
-        hosp = (await db.execute(select(Hospital))).scalars().first()
-        assert hosp is not None
+    now = datetime.now(timezone.utc)
+    req = BloodRequest(
+        hospital_id=hosp.id,
+        patient_id_token="TEST-PATIENT-RA",
+        required_blood_group="O-",
+        component_type=BloodComponentType.PRBC,
+        units_requested=2,
+        triage_level=TriageLevel.MASSIVE_TRANSFUSION_PROTOCOL,
+        calculated_urgency_score=100.0,
+        deadline_at=now + timedelta(minutes=12),
+        status=RequestStatus.PENDING_EVALUATION,
+    )
+    db.add(req)
+    await db.commit()
+    await db.refresh(req)
 
-        # Create a test MTP request for 2 units O- (like Request RA)
-        now = datetime.now(timezone.utc)
-        req = BloodRequest(
-            hospital_id=hosp.id,
-            patient_id_token="TEST-PATIENT-RA",
-            required_blood_group="O-",
-            component_type=BloodComponentType.PRBC,
-            units_requested=2,
-            triage_level=TriageLevel.MASSIVE_TRANSFUSION_PROTOCOL,
-            calculated_urgency_score=100.0,
-            deadline_at=now + timedelta(minutes=12),
-            status=RequestStatus.PENDING_EVALUATION
-        )
-        db.add(req)
-        await db.commit()
-        await db.refresh(req)
+    result = await AllocationService(db).execute_allocation_pipeline(req.id)
 
-        # Run allocation pipeline
-        alloc_svc = AllocationService(db)
-        result = await alloc_svc.execute_allocation_pipeline(req.id)
-        
-        # Verify strategy is INVENTORY and 2 units were allocated
-        assert result["strategy"] == "INVENTORY"
-        assert result["allocated_units"] == 2
-        assert result["request_status"] == RequestStatus.COMMITTED_IN_TRANSIT.value
+    assert result["strategy"] == "INVENTORY"
+    assert result["allocated_units"] == 2
+    assert result["request_status"] == RequestStatus.COMMITTED_IN_TRANSIT.value

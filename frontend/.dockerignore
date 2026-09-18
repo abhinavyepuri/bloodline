@@ -1,0 +1,17 @@
+# Never copy host build artefacts or installed packages into the image — the image
+# installs its own with `npm ci`, and `COPY . .` would otherwise clobber them with
+# binaries built for the host platform.
+node_modules
+dist
+.vite
+
+# Local environment overrides must not leak into a published bundle.
+.env
+.env.local
+.env.*.local
+
+.git
+.gitignore
+Dockerfile
+.dockerignore
+npm-debug.log*

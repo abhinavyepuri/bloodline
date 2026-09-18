@@ -26,7 +26,7 @@ class DonorIneligibleError(DomainException):
 class AllocationRaceConditionError(DomainException):
     def __init__(self, request_id: str):
         super().__init__(
-            f"This emergency request has already been claimed by another nearby donor.",
+            "Every unit on this emergency request has already been claimed by other donors.",
             status.HTTP_409_CONFLICT
         )
 

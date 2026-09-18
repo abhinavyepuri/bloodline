@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Optional
 from sqlalchemy import Column, String, Integer, Float, DateTime, Enum as SQLEnum, ForeignKey
 from sqlalchemy.orm import relationship
 from app.models.base import TimestampedModel
+from app.models.allocation import COVERING_ALLOCATION_STATUSES
 from app.models.inventory import BloodComponentType
 
 
@@ -57,3 +59,32 @@ class BloodRequest(TimestampedModel):
 
     hospital = relationship("Hospital", backref="requests")
     allocations = relationship("Allocation", back_populates="request")
+
+    # -- Derived read-only views -------------------------------------------------
+    # These are plain properties so Pydantic's ``from_attributes`` picks them up
+    # without any serialization-time mutation of the ORM object. Each reads through
+    # ``self.__dict__`` so an unloaded relationship yields None/0 rather than
+    # triggering a lazy load (which would raise under asyncio).
+
+    @property
+    def hospital_name(self) -> Optional[str]:
+        hospital = self.__dict__.get("hospital")
+        return hospital.name if hospital is not None else None
+
+    @property
+    def hospital_address(self) -> Optional[str]:
+        hospital = self.__dict__.get("hospital")
+        return hospital.address if hospital is not None else None
+
+    @property
+    def units_covered(self) -> int:
+        """Units genuinely secured so far — drives the "2 of 4 covered" display."""
+        allocations = self.__dict__.get("allocations")
+        if not allocations:
+            return 0
+        return sum(1 for a in allocations if a.status in COVERING_ALLOCATION_STATUSES)
+
+    @property
+    def units_shortfall(self) -> int:
+        """Units still outstanding; never negative."""
+        return max(self.units_requested - self.units_covered, 0)

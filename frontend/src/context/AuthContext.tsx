@@ -1,90 +1,150 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { User, UserRole } from '../types';
+import { DEV_ROLE_SWITCHER } from '../config';
+import { api, loginRequest, setAuthToken, setUnauthorizedHandler } from '../lib/api';
+
+interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  role: UserRole;
+}
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  activeRole: UserRole;
-  switchRole: (role: UserRole, emailOverride?: string) => Promise<void>;
+  activeRole: UserRole | null;
+  /** True until the persisted session has been checked, so we don't flash the login screen. */
+  isBootstrapping: boolean;
   isLoading: boolean;
+  error: string | null;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  /** Demo convenience only — compiled out of production builds. */
+  switchRole: (role: UserRole, emailOverride?: string) => Promise<void>;
 }
 
-const PRESET_ACCOUNTS: Record<string, { email: string; role: UserRole }> = {
-  HOSPITAL: { email: 'hospital@smartblood.org', role: 'HOSPITAL' },
-  BLOOD_BANK: { email: 'bloodbank@smartblood.org', role: 'BLOOD_BANK' },
-  DONOR: { email: 'alice@donor.org', role: 'DONOR' },
-  DONOR_BOB: { email: 'bob@donor.org', role: 'DONOR' },
-  COORDINATOR: { email: 'coordinator@smartblood.org', role: 'COORDINATOR' },
+const TOKEN_STORAGE_KEY = 'smartblood_token';
+const ROLE_STORAGE_KEY = 'smartblood_role';
+
+/** Preset demo accounts, used only by the development role switcher. */
+const PRESET_ACCOUNTS: Record<string, string> = {
+  HOSPITAL: 'hospital@smartblood.org',
+  BLOOD_BANK: 'bloodbank@smartblood.org',
+  DONOR: 'alice@donor.org',
+  COORDINATOR: 'coordinator@smartblood.org',
+  ADMIN: 'admin@smartblood.org',
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('smartblood_token'));
-  const [activeRole, setActiveRole] = useState<UserRole>(
-    (localStorage.getItem('smartblood_role') as UserRole) || 'COORDINATOR'
-  );
+  const [token, setToken] = useState<string | null>(null);
+  const [activeRole, setActiveRole] = useState<UserRole | null>(null);
+  const [isBootstrapping, setIsBootstrapping] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const loginWithCredentials = async (email: string) => {
-    setIsLoading(true);
-    try {
-      const res = await fetch('http://localhost:8000/api/v1/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password: 'password123' }),
-      });
-      if (!res.ok) throw new Error('Login failed');
-      const data = await res.json();
-      setToken(data.access_token);
-      setActiveRole(data.role);
-      localStorage.setItem('smartblood_token', data.access_token);
-      localStorage.setItem('smartblood_role', data.role);
-
-      // Fetch user profile
-      const meRes = await fetch('http://localhost:8000/api/v1/auth/me', {
-        headers: { Authorization: `Bearer ${data.access_token}` },
-      });
-      if (meRes.ok) {
-        const meData = await meRes.json();
-        setUser(meData);
-      }
-    } catch (err) {
-      console.error('Authentication error:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const switchRole = async (role: UserRole, emailOverride?: string) => {
-    let email = emailOverride;
-    if (!email) {
-      const preset = PRESET_ACCOUNTS[role];
-      email = preset ? preset.email : 'coordinator@smartblood.org';
-    }
-    await loginWithCredentials(email);
-  };
-
-  useEffect(() => {
-    // Initial login as coordinator or remembered role
-    const initialEmail =
-      activeRole === 'HOSPITAL'
-        ? 'hospital@smartblood.org'
-        : activeRole === 'BLOOD_BANK'
-        ? 'bloodbank@smartblood.org'
-        : activeRole === 'DONOR'
-        ? 'alice@donor.org'
-        : 'coordinator@smartblood.org';
-
-    loginWithCredentials(initialEmail);
+  const clearSession = useCallback(() => {
+    setToken(null);
+    setUser(null);
+    setActiveRole(null);
+    setAuthToken(null);
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    localStorage.removeItem(ROLE_STORAGE_KEY);
   }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, token, activeRole, switchRole, isLoading }}>
-      {children}
-    </AuthContext.Provider>
+  // The API client calls this when it sees a 401, so an expired token drops the
+  // user back to the login screen instead of leaving every dashboard silently empty.
+  useEffect(() => {
+    setUnauthorizedHandler(clearSession);
+    return () => setUnauthorizedHandler(null);
+  }, [clearSession]);
+
+  const loadProfile = useCallback(async (accessToken: string, role: UserRole) => {
+    setAuthToken(accessToken);
+    setToken(accessToken);
+    setActiveRole(role);
+    localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+    localStorage.setItem(ROLE_STORAGE_KEY, role);
+
+    const profile = await api.get<User>('/auth/me');
+    setUser(profile);
+  }, []);
+
+  const login = useCallback(
+    async (email: string, password: string) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const data = await loginRequest<LoginResponse>('/auth/login', { email, password });
+        await loadProfile(data.access_token, data.role);
+      } catch (err) {
+        clearSession();
+        setError(err instanceof Error ? err.message : 'Sign-in failed. Please try again.');
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [clearSession, loadProfile]
   );
+
+  const logout = useCallback(() => {
+    clearSession();
+    setError(null);
+  }, [clearSession]);
+
+  const switchRole = useCallback(
+    async (role: UserRole, emailOverride?: string) => {
+      const email = emailOverride ?? PRESET_ACCOUNTS[role] ?? PRESET_ACCOUNTS.COORDINATOR;
+      await login(email, 'password123');
+    },
+    [login]
+  );
+
+  // Resume a persisted session once, on mount.
+  useEffect(() => {
+    const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+    const storedRole = localStorage.getItem(ROLE_STORAGE_KEY) as UserRole | null;
+
+    if (!storedToken || !storedRole) {
+      setIsBootstrapping(false);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        await loadProfile(storedToken, storedRole);
+      } catch {
+        if (!cancelled) clearSession();
+      } finally {
+        if (!cancelled) setIsBootstrapping(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clearSession, loadProfile]);
+
+  const value = useMemo(
+    () => ({
+      user,
+      token,
+      activeRole,
+      isBootstrapping,
+      isLoading,
+      error,
+      login,
+      logout,
+      switchRole: DEV_ROLE_SWITCHER ? switchRole : async () => {},
+    }),
+    [user, token, activeRole, isBootstrapping, isLoading, error, login, logout, switchRole]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {

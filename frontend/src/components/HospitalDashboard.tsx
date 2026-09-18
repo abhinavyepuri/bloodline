@@ -1,15 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
+import { api } from '../lib/api';
 import { BloodRequest, BloodComponentType, TriageLevel, AllocationAuditLog } from '../types';
-import { AlertCircle, Clock, CheckCircle2, RefreshCw, Send, Info, Truck, ShieldAlert } from 'lucide-react';
+import { AlertCircle, Clock, CheckCircle2, RefreshCw, Send, Info, Truck, ShieldAlert, X } from 'lucide-react';
+
+const COMPONENT_LABELS: Record<BloodComponentType, string> = {
+  PRBC: 'Red Blood Cells',
+  WHOLE_BLOOD: 'Whole Blood',
+  PLATELETS: 'Platelets',
+  FFP: 'Plasma',
+  CRYOPRECIPITATE: 'Cryoprecipitate',
+};
 
 export const HospitalDashboard: React.FC = () => {
-  const { token } = useAuth();
+  const { user } = useAuth();
   const { lastEvent } = useWebSocket();
 
   const [requests, setRequests] = useState<BloodRequest[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Form State
   const [bloodGroup, setBloodGroup] = useState('O-');
@@ -23,26 +33,22 @@ export const HospitalDashboard: React.FC = () => {
   const [selectedAuditLog, setSelectedAuditLog] = useState<AllocationAuditLog[] | null>(null);
   const [inspectingReqId, setInspectingReqId] = useState<string | null>(null);
 
-  const fetchRequests = async () => {
+  const fetchRequests = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/api/v1/requests', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setRequests(data);
-      }
+      setRequests(await api.get<BloodRequest[]>('/requests'));
+      setError(null);
     } catch (err) {
       console.error('Failed to fetch requests:', err);
+      setError(err instanceof Error ? err.message : 'Could not load your requests.');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchRequests();
-  }, [token]);
+  }, [fetchRequests, user]);
 
   // Refresh on relevant WebSocket events
   useEffect(() => {
@@ -61,11 +67,12 @@ export const HospitalDashboard: React.FC = () => {
     ) {
       fetchRequests();
     }
-  }, [lastEvent]);
+  }, [lastEvent, fetchRequests]);
 
   const handleCreateRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setError(null);
 
     const deadlineAt = new Date(Date.now() + deadlineMinutes * 60000).toISOString();
     const payload = {
@@ -78,18 +85,11 @@ export const HospitalDashboard: React.FC = () => {
     };
 
     try {
-      const res = await fetch('http://localhost:8000/api/v1/requests', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error('Submission failed');
+      // Hospital accounts always order for their own facility, so no hospital_id is sent.
+      await api.post<BloodRequest>('/requests', payload);
       await fetchRequests();
     } catch (err) {
-      alert('Error creating emergency request: ' + err);
+      setError(err instanceof Error ? err.message : 'Could not submit the request.');
     } finally {
       setSubmitting(false);
     }
@@ -97,30 +97,30 @@ export const HospitalDashboard: React.FC = () => {
 
   const handleFulfill = async (id: string) => {
     try {
-      await fetch(`http://localhost:8000/api/v1/requests/${id}/fulfill`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      fetchRequests();
+      await api.post(`/requests/${id}/fulfill`);
+      await fetchRequests();
     } catch (err) {
-      console.error('Error fulfilling request:', err);
+      // The server refuses to confirm receipt while bags are still outstanding.
+      setError(err instanceof Error ? err.message : 'Could not confirm receipt.');
+    }
+  };
+
+  const handleCancel = async (id: string) => {
+    try {
+      await api.patch(`/requests/${id}/cancel`);
+      await fetchRequests();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not cancel the request.');
     }
   };
 
   const viewExplanation = async (id: string) => {
     setInspectingReqId(id);
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/audit/requests/${id}/explanation`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedAuditLog(data);
-      } else {
-        setSelectedAuditLog([]);
-      }
+      setSelectedAuditLog(await api.get<AllocationAuditLog[]>(`/audit/requests/${id}/explanation`));
     } catch (err) {
       console.error('Failed to load audit logs:', err);
+      setSelectedAuditLog([]);
     }
   };
 
@@ -130,13 +130,13 @@ export const HospitalDashboard: React.FC = () => {
       <div className="glass-panel highlight-red" style={{ height: 'fit-content' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1.25rem' }}>
           <AlertCircle size={22} color="var(--crimson-500)" />
-          <h2 style={{ fontSize: '1.15rem', fontWeight: 700 }}>Emergency Blood Intake</h2>
+          <h2 style={{ fontSize: '1.15rem', fontWeight: 700 }}>Order Emergency Blood</h2>
         </div>
 
         <form onSubmit={handleCreateRequest} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-              Required Blood Group
+              Blood Group Needed
             </label>
             <select
               id="intake-blood-group"
@@ -153,7 +153,7 @@ export const HospitalDashboard: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
             <div>
               <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                Component Type
+                Blood Product
               </label>
               <select
                 id="intake-component"
@@ -161,15 +161,14 @@ export const HospitalDashboard: React.FC = () => {
                 value={componentType}
                 onChange={(e) => setComponentType(e.target.value as BloodComponentType)}
               >
-                <option value="PRBC">Packed RBCs (PRBC)</option>
-                <option value="WHOLE_BLOOD">Whole Blood</option>
-                <option value="PLATELETS">Platelets</option>
-                <option value="FFP">Fresh Frozen Plasma</option>
+                {(Object.keys(COMPONENT_LABELS) as BloodComponentType[]).map((ct) => (
+                  <option key={ct} value={ct}>{COMPONENT_LABELS[ct]}</option>
+                ))}
               </select>
             </div>
             <div>
               <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                Units Requested
+                Number of Bags
               </label>
               <input
                 id="intake-units"
@@ -185,7 +184,7 @@ export const HospitalDashboard: React.FC = () => {
 
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-              Clinical Triage Severity
+              How Urgent Is This?
             </label>
             <select
               id="intake-triage"
@@ -193,16 +192,16 @@ export const HospitalDashboard: React.FC = () => {
               value={triageLevel}
               onChange={(e) => setTriageLevel(e.target.value as TriageLevel)}
             >
-              <option value="MASSIVE_TRANSFUSION_PROTOCOL">🔴 Level 1: Massive Transfusion (MTP &lt;15m)</option>
-              <option value="ACTIVE_TRAUMA">🟠 Level 2: Active Trauma (&lt;1 hour)</option>
-              <option value="SCHEDULED_EMERGENCY_RESERVE">🟡 Level 3: Scheduled Urgent Surgery (&lt;4h)</option>
-              <option value="ROUTINE_CLINICAL">🟢 Level 4: Routine Replenishment (&lt;24h)</option>
+              <option value="MASSIVE_TRANSFUSION_PROTOCOL">🔴 Life-Threatening Emergency (Needed in &lt;15 mins)</option>
+              <option value="ACTIVE_TRAUMA">🟠 Severe Injury / Accident (Needed in &lt;1 hour)</option>
+              <option value="SCHEDULED_EMERGENCY_RESERVE">🟡 Urgent Surgery (Needed in &lt;4 hours)</option>
+              <option value="ROUTINE_CLINICAL">🟢 Standard Delivery (Needed in &lt;24 hours)</option>
             </select>
           </div>
 
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-              Clinical Deadline (Minutes from now)
+              Needed Within (Minutes)
             </label>
             <input
               id="intake-deadline"
@@ -223,7 +222,7 @@ export const HospitalDashboard: React.FC = () => {
             style={{ marginTop: '0.5rem', width: '100%' }}
           >
             <Send size={16} />
-            {submitting ? 'Optimizing & Broadcasting...' : 'Submit Emergency Request'}
+            {submitting ? 'Sending Request...' : 'Send Emergency Request to Blood Bank'}
           </button>
         </form>
       </div>
@@ -241,6 +240,33 @@ export const HospitalDashboard: React.FC = () => {
           </button>
         </div>
 
+        {error && (
+          <div style={{
+            background: 'rgba(239, 68, 68, 0.15)',
+            border: '1px solid var(--crimson-500)',
+            padding: '0.75rem 1rem',
+            borderRadius: '8px',
+            marginBottom: '1rem',
+            fontSize: '0.85rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '0.75rem',
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <ShieldAlert size={16} color="var(--crimson-500)" />
+              {error}
+            </span>
+            <button
+              onClick={() => setError(null)}
+              aria-label="Dismiss"
+              style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
         {requests.length === 0 ? (
           <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
             No active emergency blood requests. Submit an intake form to initiate automated matching.
@@ -250,6 +276,10 @@ export const HospitalDashboard: React.FC = () => {
             {requests.map((req) => {
               const urgency = req.calculated_urgency_score;
               const isUrgent = urgency >= 80;
+              const covered = req.units_covered ?? 0;
+              const shortfall = req.units_shortfall ?? Math.max(req.units_requested - covered, 0);
+              const fullyCovered = shortfall === 0;
+              const isClosed = req.status === 'FULFILLED' || req.status === 'CANCELLED';
 
               return (
                 <div
@@ -270,9 +300,9 @@ export const HospitalDashboard: React.FC = () => {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
-                        <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'white' }}>
-                          {req.units_requested}x {req.required_blood_group} ({req.component_type})
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                          {req.units_requested}x {req.required_blood_group} ({COMPONENT_LABELS[req.component_type] ?? req.component_type})
                         </span>
                         <span className={`badge ${
                           req.status === 'COMMITTED_IN_TRANSIT'
@@ -285,20 +315,50 @@ export const HospitalDashboard: React.FC = () => {
                             ? 'badge-purple'
                             : 'badge-cyan'
                         }`}>
-                          {req.status.replace(/_/g, ' ')}
+                          {req.status === 'COMMITTED_IN_TRANSIT'
+                            ? 'On The Way'
+                            : req.status === 'RE_PLANNING'
+                            ? 'Finding Replacement'
+                            : req.status === 'PROXIMITY_ZONE_NOTIFIED'
+                            ? 'Asking Donors'
+                            : req.status === 'FULFILLED'
+                            ? 'Delivered'
+                            : req.status}
                         </span>
                       </div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        Patient Token: <code>{req.patient_id_token}</code> | Triage: <b>{req.triage_level}</b>
+                        Patient: <code>{req.patient_id_token}</code>
                       </div>
                     </div>
 
                     {/* Urgency Meter */}
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>URGENCY SCORE</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>URGENCY LEVEL</div>
                       <div style={{ fontSize: '1.4rem', fontWeight: 800, color: isUrgent ? 'var(--crimson-500)' : 'var(--cyan-400)' }}>
-                        {req.calculated_urgency_score.toFixed(0)} <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>/ 100</span>
+                        {urgency.toFixed(0)} <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>/ 100</span>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Coverage — bags secured out of bags asked for. */}
+                  <div style={{ marginTop: '0.9rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '0.3rem' }}>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>
+                        Bags secured: {covered} of {req.units_requested}
+                      </span>
+                      {!fullyCovered && !isClosed && (
+                        <span style={{ color: 'var(--amber-500)', fontWeight: 700 }}>
+                          Still need {shortfall}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ height: '6px', background: 'var(--color-bg)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${Math.min(100, (covered / Math.max(req.units_requested, 1)) * 100)}%`,
+                        background: fullyCovered ? 'var(--emerald-500)' : 'var(--amber-500)',
+                        transition: 'width 0.3s ease',
+                      }} />
                     </div>
                   </div>
 
@@ -306,14 +366,14 @@ export const HospitalDashboard: React.FC = () => {
                   {req.allocations && req.allocations.length > 0 && (
                     <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.5rem', textTransform: 'uppercase' }}>
-                        Allocated Fulfillment Sourcing:
+                        Where This Blood Is Coming From:
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
                         {req.allocations.map((alloc) => (
                           <div
                             key={alloc.id}
                             style={{
-                              background: 'rgba(10, 13, 20, 0.6)',
+                              background: 'var(--color-bg)',
                               padding: '0.5rem 0.8rem',
                               borderRadius: '8px',
                               border: '1px solid var(--border-subtle)',
@@ -325,10 +385,10 @@ export const HospitalDashboard: React.FC = () => {
                           >
                             <Truck size={14} color="var(--emerald-400)" />
                             <span>
-                              <b>{alloc.source_type === 'BLOOD_BANK_INVENTORY' ? 'Cold-Chain Inventory Unit' : 'Live Voluntary Donor'}</b>
-                              {alloc.distance_km && ` (~${alloc.distance_km}km, ETA ~${alloc.estimated_transit_minutes}m)`}
+                              <b>{alloc.source_type === 'BLOOD_BANK_INVENTORY' ? '📦 From Blood Bank Storage' : '🙋 From Volunteer Donor'}</b>
+                              {alloc.distance_km != null && ` (~${alloc.distance_km}km away, ETA ~${alloc.estimated_transit_minutes} min)`}
                             </span>
-                            <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>{alloc.status}</span>
+                            <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>Confirmed</span>
                           </div>
                         ))}
                       </div>
@@ -336,7 +396,7 @@ export const HospitalDashboard: React.FC = () => {
                   )}
 
                   {/* Actions */}
-                  <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+                  <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
                     <button
                       id={`btn-explain-${req.id}`}
                       onClick={() => viewExplanation(req.id)}
@@ -344,9 +404,19 @@ export const HospitalDashboard: React.FC = () => {
                       style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
                     >
                       <Info size={14} />
-                      Why This Recommendation?
+                      Why this choice?
                     </button>
-                    {req.status === 'COMMITTED_IN_TRANSIT' && (
+                    {!isClosed && (
+                      <button
+                        id={`btn-cancel-${req.id}`}
+                        onClick={() => handleCancel(req.id)}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                      >
+                        Cancel Request
+                      </button>
+                    )}
+                    {req.status === 'COMMITTED_IN_TRANSIT' && fullyCovered && (
                       <button
                         id={`btn-fulfill-${req.id}`}
                         onClick={() => handleFulfill(req.id)}
@@ -367,21 +437,28 @@ export const HospitalDashboard: React.FC = () => {
 
       {/* Explainability Modal */}
       {selectedAuditLog && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
-          backdropFilter: 'blur(8px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 100,
-          padding: '1rem',
-        }}>
-          <div className="glass-panel" style={{ maxWidth: '650px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div
+          onClick={() => setSelectedAuditLog(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '1rem',
+          }}
+        >
+          <div
+            className="glass-panel"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '650px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
               <h3 style={{ fontSize: '1.15rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Info size={18} color="var(--cyan-400)" />
@@ -392,19 +469,25 @@ export const HospitalDashboard: React.FC = () => {
               </button>
             </div>
 
+            {inspectingReqId && (
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+                Request {inspectingReqId}
+              </p>
+            )}
+
             {selectedAuditLog.length === 0 ? (
               <p style={{ color: 'var(--text-muted)' }}>No audit trail entries recorded yet.</p>
             ) : (
               selectedAuditLog.map((log) => (
-                <div key={log.id} style={{ marginBottom: '1.25rem', background: 'rgba(10, 13, 20, 0.7)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                <div key={log.id} style={{ marginBottom: '1.25rem', background: 'var(--color-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                     <span className="badge badge-cyan">{log.decision_type}</span>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{new Date(log.created_at).toLocaleTimeString()}</span>
                   </div>
-                  <p style={{ fontSize: '0.9rem', color: '#e5e7eb', marginBottom: '0.75rem', lineHeight: 1.4 }}>
+                  <p style={{ fontSize: '0.9rem', color: 'var(--color-text-main)', marginBottom: '0.75rem', lineHeight: 1.4 }}>
                     {log.rationale_summary}
                   </p>
-                  <div style={{ background: 'rgba(0,0,0,0.4)', padding: '0.5rem', borderRadius: '6px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ background: 'var(--color-bg)', padding: '0.5rem', borderRadius: '6px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
                     <div style={{ color: 'var(--text-dim)', marginBottom: '0.25rem' }}>Candidate Evaluation Scores:</div>
                     <pre style={{ margin: 0, color: 'var(--cyan-400)', whiteSpace: 'pre-wrap' }}>
                       {JSON.stringify(log.candidate_scores_json, null, 2)}

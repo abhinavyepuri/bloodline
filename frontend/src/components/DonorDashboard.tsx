@@ -1,48 +1,75 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
-import { Donor, BloodRequest } from '../types';
-import { UserCheck, MapPin, Award, CheckCircle, XCircle, Clock, AlertCircle } from 'lucide-react';
+import { api } from '../lib/api';
+import { BloodRequest, Donor, DonorRespondResult } from '../types';
+import { UserCheck, MapPin, CheckCircle, XCircle, Clock, AlertCircle, X } from 'lucide-react';
+
+const RESPONSE_WINDOW_SECONDS = 180;
+
+/** mm:ss for a remaining number of seconds. */
+function formatCountdown(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Ticking clock used for response countdowns.
+ *
+ * Runs a single interval for the whole dashboard rather than one per alert.
+ */
+function useCountdown(active: boolean): number {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [active]);
+  return tick;
+}
 
 export const DonorDashboard: React.FC = () => {
-  const { user, token } = useAuth();
+  const { user } = useAuth();
   const { lastEvent } = useWebSocket();
 
   const [donorProfile, setDonorProfile] = useState<Donor | null>(null);
   const [activeAlerts, setActiveAlerts] = useState<BloodRequest[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [responseStatus, setResponseStatus] = useState<string | null>(null);
+  const [responseStatus, setResponseStatus] = useState<{ text: string; ok: boolean } | null>(null);
+  const [lastResult, setLastResult] = useState<DonorRespondResult | null>(null);
+  /** Alerts the donor has pushed aside, so the full-screen panel is not permanent. */
+  const [dismissedAlertIds, setDismissedAlertIds] = useState<string[]>([]);
+  /** Local anchors so the countdown keeps moving between server refreshes. */
+  const alertDeadlinesRef = useRef<Record<string, number>>({});
 
-  const fetchDonorData = async () => {
-    setLoading(true);
+  const fetchDonorData = useCallback(async () => {
     try {
-      // Fetch donor profile
-      const profRes = await fetch('http://localhost:8000/api/v1/donors/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (profRes.ok) {
-        const prof = await profRes.json();
-        setDonorProfile(prof);
-      }
+      const [profile, alerts] = await Promise.all([
+        api.get<Donor>('/donors/me'),
+        api.get<BloodRequest[]>('/donors/requests/active'),
+      ]);
+      setDonorProfile(profile);
+      setActiveAlerts(alerts);
 
-      // Fetch active broadcast alerts
-      const alertsRes = await fetch('http://localhost:8000/api/v1/donors/requests/active', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (alertsRes.ok) {
-        const alerts = await alertsRes.json();
-        setActiveAlerts(alerts);
+      const now = Date.now();
+      const deadlines: Record<string, number> = {};
+      for (const alert of alerts) {
+        const seconds = alert.alert_expires_in_seconds ?? RESPONSE_WINDOW_SECONDS;
+        deadlines[alert.id] = now + seconds * 1000;
       }
+      alertDeadlinesRef.current = deadlines;
+
+      // Drop dismissals for alerts that no longer exist, so a re-issued alert reopens.
+      setDismissedAlertIds((prev) => prev.filter((id) => alerts.some((a) => a.id === id)));
     } catch (err) {
       console.error('Error fetching donor data:', err);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchDonorData();
-  }, [user, token]);
+  }, [fetchDonorData, user]);
 
   useEffect(() => {
     if (
@@ -58,60 +85,64 @@ export const DonorDashboard: React.FC = () => {
     ) {
       fetchDonorData();
     }
-  }, [lastEvent]);
+  }, [lastEvent, fetchDonorData]);
+
+  // Re-render every second while a response window is open.
+  const tick = useCountdown(activeAlerts.length > 0);
 
   const toggleAvailability = async () => {
     if (!donorProfile) return;
     try {
-      const res = await fetch('http://localhost:8000/api/v1/donors/availability', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ is_available: !donorProfile.is_available }),
+      const updated = await api.patch<Donor>('/donors/availability', {
+        is_available: !donorProfile.is_available,
       });
-      if (res.ok) {
-        const updated = await res.json();
-        setDonorProfile(updated);
-      }
+      setDonorProfile(updated);
     } catch (err) {
       console.error('Error updating availability:', err);
+      setResponseStatus({
+        text: err instanceof Error ? err.message : 'Could not update your availability.',
+        ok: false,
+      });
     }
   };
 
   const handleRespond = async (requestId: string, action: 'ACCEPT' | 'DECLINE') => {
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/donors/requests/${requestId}/respond`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ action }),
-      });
+      const result = await api.post<DonorRespondResult>(
+        `/donors/requests/${requestId}/respond`,
+        { action }
+      );
 
-      if (res.status === 409) {
-        setResponseStatus('RACE_CONFLICT: Request was already hard-locked by another faster donor!');
-        return;
-      }
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || 'Failed to submit response');
-      }
-
-      const result = await res.json();
       if (action === 'ACCEPT') {
-        setResponseStatus('SUCCESS: First-Ack Hard Lock Acquired! You are committed in transit to the hospital.');
+        setLastResult(result);
+        setResponseStatus({
+          text: 'Thank you! You are confirmed to help this patient. Please head toward the hospital.',
+          ok: true,
+        });
       } else {
-        setResponseStatus('Declined recorded. Proximity soft lock released.');
+        setResponseStatus({ text: 'You declined. We will notify other nearby volunteers.', ok: true });
       }
       await fetchDonorData();
-    } catch (err: any) {
-      setResponseStatus(`Error: ${err.message}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to submit your response.';
+      setResponseStatus({ text: message, ok: false });
     }
   };
+
+  const dismissAlert = (requestId: string) => {
+    setDismissedAlertIds((prev) => [...prev, requestId]);
+  };
+
+  const visibleAlerts = activeAlerts.filter(
+    (alert) => !dismissedAlertIds.includes(alert.id)
+  );
+
+  const deadlineFor = (alert: BloodRequest): number => {
+    return alertDeadlinesRef.current[alert.id] ?? Date.now() + RESPONSE_WINDOW_SECONDS * 1000;
+  };
+
+  // `tick` is read here so the countdown re-renders each second.
+  void tick;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: '1.5rem' }}>
@@ -146,48 +177,68 @@ export const DonorDashboard: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Reliability Score</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Reliability Rating</span>
               <span style={{ fontWeight: 700, color: 'var(--emerald-400)' }}>
                 {(donorProfile.reliability_score * 100).toFixed(0)}%
               </span>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Verified Donations</span>
-              <span style={{ fontWeight: 700, color: 'white' }}>{donorProfile.total_successful_donations}</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Completed Donations</span>
+              <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{donorProfile.total_successful_donations}</span>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--cyan-400)' }}>
               <MapPin size={14} />
-              <span>
-                Coordinates: {donorProfile.latitude?.toFixed(4)}, {donorProfile.longitude?.toFixed(4)}
-              </span>
+              <span>Location: City Center Area</span>
             </div>
 
-            {/* Availability Toggle */}
+            {/* Availability Status */}
             <div style={{
-              background: 'rgba(10, 13, 20, 0.6)',
-              padding: '0.85rem',
+              background: donorProfile.is_available ? 'rgba(16, 185, 129, 0.1)' : 'rgba(100, 116, 139, 0.1)',
+              padding: '1rem',
               borderRadius: '8px',
-              border: '1px solid var(--border-subtle)',
+              border: `1px solid ${donorProfile.is_available ? 'var(--emerald-500)' : 'var(--border-subtle)'}`,
               marginTop: '0.5rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem',
+              alignItems: 'center',
+              textAlign: 'center'
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Emergency Ready</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    {donorProfile.is_available ? 'Active in proximity radar' : 'Unavailable for alerts'}
-                  </div>
+              <div>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem',
+                  fontSize: '1.1rem',
+                  fontWeight: 800,
+                  color: donorProfile.is_available ? 'var(--emerald-600)' : 'var(--text-muted)'
+                }}>
+                  <div style={{
+                    width: '12px', height: '12px', borderRadius: '50%',
+                    background: donorProfile.is_available ? 'var(--emerald-500)' : 'var(--text-dim)',
+                    boxShadow: donorProfile.is_available ? '0 0 10px var(--emerald-500)' : 'none',
+                    animation: donorProfile.is_available ? 'pulseGlow 2s infinite' : 'none'
+                  }} />
+                  {donorProfile.is_available ? 'ONLINE & READY' : 'OFFLINE (PAUSED)'}
                 </div>
-                <button
-                  id="btn-toggle-availability"
-                  onClick={toggleAvailability}
-                  className={`btn ${donorProfile.is_available ? 'btn-cyan' : 'btn-secondary'}`}
-                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                >
-                  {donorProfile.is_available ? 'ONLINE' : 'STANDBY'}
-                </button>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                  {donorProfile.is_available
+                    ? 'You are actively monitoring for nearby emergency requests.'
+                    : 'You will not receive any emergency broadcast alerts.'}
+                </div>
               </div>
+
+              <button
+                id="btn-toggle-availability"
+                onClick={toggleAvailability}
+                className={`btn ${donorProfile.is_available ? 'btn-secondary' : 'btn-primary'}`}
+                style={{ width: '100%', padding: '0.6rem', fontSize: '0.9rem', marginTop: '0.25rem' }}
+              >
+                {donorProfile.is_available ? 'Pause Emergency Alerts' : 'Go Online to Help'}
+              </button>
             </div>
           </div>
         )}
@@ -198,17 +249,39 @@ export const DonorDashboard: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <AlertCircle size={22} color="var(--crimson-500)" />
-            Active Emergency Proximity Broadcasts
+            Urgent Blood Requests Near You
           </h2>
-          <span className="badge badge-red" style={{ animation: 'radarSweep 2s infinite' }}>
-            {activeAlerts.length} Active Alerts
+          <span className="badge badge-red">
+            {activeAlerts.length} Urgent Request{activeAlerts.length !== 1 ? 's' : ''}
           </span>
         </div>
 
+        {lastResult && (
+          <div style={{
+            background: 'rgba(16, 185, 129, 0.12)',
+            border: '1px solid var(--emerald-500)',
+            padding: '0.85rem 1rem',
+            borderRadius: '8px',
+            marginBottom: '1rem',
+            fontSize: '0.85rem',
+          }}>
+            <div style={{ fontWeight: 700, color: 'var(--emerald-600)' }}>
+              You are confirmed for this donation
+            </div>
+            <div style={{ marginTop: '0.3rem', color: 'var(--text-muted)' }}>
+              {lastResult.distance_km != null && <>Distance: <b>{lastResult.distance_km} km</b> &nbsp;|&nbsp; </>}
+              {lastResult.estimated_transit_minutes != null && <>ETA: <b>~{lastResult.estimated_transit_minutes} min</b> &nbsp;|&nbsp; </>}
+              {lastResult.units_covered != null && lastResult.units_requested != null && (
+                <>Hospital now has <b>{lastResult.units_covered} of {lastResult.units_requested}</b> bag(s) covered.</>
+              )}
+            </div>
+          </div>
+        )}
+
         {responseStatus && (
           <div style={{
-            background: responseStatus.includes('SUCCESS') ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
-            border: `1px solid ${responseStatus.includes('SUCCESS') ? 'var(--emerald-500)' : 'var(--crimson-500)'}`,
+            background: responseStatus.ok ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+            border: `1px solid ${responseStatus.ok ? 'var(--emerald-500)' : 'var(--crimson-500)'}`,
             padding: '0.75rem 1rem',
             borderRadius: '8px',
             marginBottom: '1rem',
@@ -217,89 +290,154 @@ export const DonorDashboard: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            gap: '0.75rem',
           }}>
-            <span>{responseStatus}</span>
-            <button onClick={() => setResponseStatus(null)} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}>
-              ✕
+            <span>{responseStatus.text}</span>
+            <button
+              onClick={() => setResponseStatus(null)}
+              aria-label="Dismiss message"
+              style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+            >
+              <X size={16} />
             </button>
           </div>
         )}
 
-        {activeAlerts.length === 0 ? (
+        {activeAlerts.length === 0 && (
           <div className="glass-panel" style={{ textAlign: 'center', padding: '3.5rem', color: 'var(--text-muted)' }}>
             <UserCheck size={36} color="var(--text-dim)" style={{ marginBottom: '0.75rem' }} />
-            <p>No open emergency broadcasts targeting your blood group right now.</p>
+            <p>No open emergency blood requests matching your group right now.</p>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.5rem' }}>
-              When a hospital issues an emergency broadcast that cannot be met from blood bank inventory, an alert will flash here with a 180s response countdown.
+              When a hospital runs out of blood bags in storage, an urgent alert will buzz here so you can accept and help save a life.
             </p>
           </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {activeAlerts.map((alert) => (
-              <div
-                key={alert.id}
-                id={`donor-alert-${alert.id}`}
-                className="glass-panel highlight-red"
-                style={{
-                  border: '2px solid var(--crimson-500)',
-                  animation: 'pulseGlow 2.5s infinite',
-                  position: 'relative',
-                  overflow: 'hidden',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
-                      <span className="badge badge-red" style={{ fontSize: '0.8rem' }}>
-                        EMERGENCY BROADCAST
-                      </span>
-                      <span style={{ fontSize: '1.3rem', fontWeight: 800, color: 'white' }}>
-                        {alert.units_requested}x {alert.required_blood_group} ({alert.component_type})
-                      </span>
+        )}
+
+        {/* Alerts that were dismissed stay reachable here instead of vanishing. */}
+        {activeAlerts.length > 0 && visibleAlerts.length === 0 && (
+          <div className="glass-panel" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+            <p>You have set aside {activeAlerts.length} alert(s).</p>
+            <button
+              onClick={() => setDismissedAlertIds([])}
+              className="btn btn-secondary"
+              style={{ marginTop: '0.75rem', fontSize: '0.85rem' }}
+            >
+              Show my alerts again
+            </button>
+          </div>
+        )}
+
+        {visibleAlerts.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {visibleAlerts.map((alert) => {
+              const remaining = Math.round((deadlineFor(alert) - Date.now()) / 1000);
+              const expired = remaining <= 0;
+              const stillNeeded = alert.units_shortfall ?? alert.units_requested;
+
+              return (
+                <div
+                  key={alert.id}
+                  id={`donor-alert-${alert.id}`}
+                  className="glass-panel highlight-red"
+                  style={{
+                    border: '2px solid var(--crimson-500)',
+                    position: 'relative',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                        <span className="badge badge-red" style={{ fontSize: '0.8rem' }}>
+                          URGENT DONOR NEEDED
+                        </span>
+                        <span style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                          {stillNeeded}x {alert.required_blood_group} ({alert.component_type === 'PRBC' ? 'Red Blood Cells' : alert.component_type})
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                        {alert.hospital_name || 'Hospital'} | Urgency: <b>{alert.calculated_urgency_score.toFixed(0)}/100</b>
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                      Metro General Hospital | Triage: <b>{alert.triage_level}</b> | Urgency: <b>{alert.calculated_urgency_score}/100</b>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        background: expired ? 'rgba(100, 116, 139, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                        padding: '0.4rem 0.8rem',
+                        borderRadius: '8px',
+                      }}>
+                        <Clock size={16} color={expired ? 'var(--text-muted)' : 'var(--crimson-500)'} />
+                        <span style={{
+                          fontSize: '0.85rem',
+                          fontWeight: 800,
+                          color: expired ? 'var(--text-muted)' : 'var(--color-primary)',
+                        }}>
+                          {expired ? 'Window closed' : `Respond in ${formatCountdown(remaining)}`}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => dismissAlert(alert.id)}
+                        aria-label="Set this alert aside"
+                        title="Set aside"
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: '6px',
+                          color: 'var(--text-muted)',
+                          cursor: 'pointer',
+                          padding: '0.35rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <X size={15} />
+                      </button>
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(239, 68, 68, 0.2)', padding: '0.4rem 0.8rem', borderRadius: '8px' }}>
-                    <Clock size={16} color="var(--crimson-500)" />
-                    <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#fca5a5' }}>
-                      TTL: 180s
-                    </span>
+                  <div style={{ marginTop: '1rem', background: 'var(--color-bg)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.85rem' }}>
+                    <p style={{ color: 'var(--text-main)', lineHeight: 1.4 }}>
+                      A patient at <b>{alert.hospital_name || 'a nearby hospital'}</b> urgently needs{' '}
+                      <b>{stillNeeded} more bag(s) of {alert.required_blood_group} blood</b>.
+                      {alert.units_covered > 0 && (
+                        <> {alert.units_covered} of {alert.units_requested} bag(s) are already covered.</>
+                      )}{' '}
+                      Each volunteer who accepts covers one bag.
+                    </p>
+                  </div>
+
+                  <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                    <button
+                      id={`btn-decline-${alert.id}`}
+                      onClick={() => handleRespond(alert.id, 'DECLINE')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.85rem', padding: '0.5rem 1rem' }}
+                    >
+                      <XCircle size={16} />
+                      I Can't Make It
+                    </button>
+                    <button
+                      id={`btn-accept-${alert.id}`}
+                      onClick={() => handleRespond(alert.id, 'ACCEPT')}
+                      disabled={expired}
+                      className="btn btn-primary"
+                      style={{
+                        fontSize: '0.85rem',
+                        padding: '0.5rem 1.25rem',
+                        opacity: expired ? 0.6 : 1,
+                        cursor: expired ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      <CheckCircle size={16} />
+                      I Can Help! (Accept & Head to Hospital)
+                    </button>
                   </div>
                 </div>
-
-                <div style={{ marginTop: '1rem', background: 'rgba(10, 13, 20, 0.6)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.85rem' }}>
-                  <p style={{ color: '#e5e7eb', lineHeight: 1.4 }}>
-                    Your location is within the <b>5 km proximity geofence</b> (~2.1 km away, estimated transit ~4 min).
-                    The system is broadcasting to eligible compatible donors simultaneously. <b>First accepted response claims the hard-lock reservation.</b>
-                  </p>
-                </div>
-
-                {/* Respond Buttons */}
-                <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-                  <button
-                    id={`btn-decline-${alert.id}`}
-                    onClick={() => handleRespond(alert.id, 'DECLINE')}
-                    className="btn btn-secondary"
-                    style={{ fontSize: '0.85rem', padding: '0.5rem 1rem' }}
-                  >
-                    <XCircle size={16} />
-                    Decline Dispatch
-                  </button>
-                  <button
-                    id={`btn-accept-${alert.id}`}
-                    onClick={() => handleRespond(alert.id, 'ACCEPT')}
-                    className="btn btn-primary"
-                    style={{ fontSize: '0.85rem', padding: '0.5rem 1.25rem' }}
-                  >
-                    <CheckCircle size={16} />
-                    ACCEPT & COMMIT DISPATCH (FIRST-ACK)
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

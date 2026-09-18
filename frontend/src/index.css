@@ -1,31 +1,52 @@
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
 :root {
-  --bg-primary: #0a0d14;
-  --bg-surface: #111726;
-  --bg-card: rgba(22, 30, 49, 0.7);
-  --bg-card-hover: rgba(30, 41, 67, 0.85);
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-highlight: rgba(239, 68, 68, 0.35);
-  --border-cyan: rgba(6, 182, 212, 0.35);
+  /* Medical Professional Palette */
+  --color-primary: #B91C1C;
+  --color-primary-hover: #991B1B;
+  --color-accent: #DC2626;
+  
+  --color-bg: #F8FAFC;
+  --color-surface: #FFFFFF;
+  
+  --color-text-main: #0F172A;
+  --color-text-secondary: #475569;
+  
+  --color-border: #E2E8F0;
+  
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+  --color-critical: #EF4444;
+  --color-info: #3B82F6;
 
-  --crimson-500: #ef4444;
-  --crimson-600: #dc2626;
-  --crimson-glow: rgba(239, 68, 68, 0.25);
+  /* Semantic UI Mapping - Preserved variable names for component compatibility */
+  --bg-primary: var(--color-bg);
+  --bg-surface: var(--color-surface);
+  --bg-card: var(--color-surface);
+  --bg-card-hover: #F1F5F9;
+  --border-subtle: var(--color-border);
+  --border-highlight: var(--color-primary);
 
-  --cyan-400: #22d3ee;
-  --cyan-500: #06b6d4;
-  --cyan-glow: rgba(6, 182, 212, 0.25);
+  --crimson-500: var(--color-critical);
+  --crimson-600: var(--color-primary);
+  --crimson-glow: rgba(239, 68, 68, 0.2);
 
-  --emerald-400: #34d399;
-  --emerald-500: #10b981;
-  --amber-400: #fbbf24;
-  --amber-500: #f59e0b;
-  --purple-400: #c084fc;
+  --cyan-400: var(--color-info);
+  --cyan-500: #2563EB;
 
-  --text-main: #f3f4f6;
-  --text-muted: #9ca3af;
-  --text-dim: #6b7280;
+  --emerald-400: var(--color-success);
+  --emerald-500: #15803D;
+  /* Used by DonorDashboard for the "available" label; was referenced but never defined. */
+  --emerald-600: #047857;
+
+  --amber-400: var(--color-warning);
+  --amber-500: #B45309;
+
+  --purple-400: #8B5CF6;
+
+  --text-main: var(--color-text-main);
+  --text-muted: var(--color-text-secondary);
+  --text-dim: #94A3B8;
 
   --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -43,11 +64,7 @@ body {
   font-family: var(--font-sans);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
-  background-image: 
-    radial-gradient(circle at 15% 15%, rgba(239, 68, 68, 0.07) 0%, transparent 40%),
-    radial-gradient(circle at 85% 85%, rgba(6, 182, 212, 0.05) 0%, transparent 40%);
-  background-attachment: fixed;
-  overflow-x: hidden;
+  background-image: none; /* Removed dark mode gradients */
 }
 
 /* Scrollbar */
@@ -59,22 +76,22 @@ body {
   background: var(--bg-primary);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: #CBD5E1;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(239, 68, 68, 0.4);
+  background: #94A3B8;
 }
 
 /* Utility Animations */
 @keyframes pulseGlow {
   0%, 100% {
     box-shadow: 0 0 15px var(--crimson-glow);
-    border-color: rgba(239, 68, 68, 0.6);
+    border-color: rgba(239, 68, 68, 0.4);
   }
   50% {
-    box-shadow: 0 0 30px rgba(239, 68, 68, 0.45);
-    border-color: rgba(239, 68, 68, 0.9);
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.3);
+    border-color: rgba(239, 68, 68, 0.7);
   }
 }
 
@@ -109,29 +126,29 @@ body {
   padding: 1.5rem 1rem 3rem 1rem;
 }
 
-/* Glassmorphic Cards */
+/* Glassmorphic Cards -> Clean Cards */
 .glass-panel {
   background: var(--bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-subtle);
   border-radius: 14px;
   padding: 1.25rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .glass-panel:hover {
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: #CBD5E1;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
 .glass-panel.highlight-red {
-  border-color: var(--border-highlight);
-  box-shadow: 0 8px 30px rgba(220, 38, 38, 0.12);
+  border-color: var(--color-primary);
+  box-shadow: 0 8px 30px rgba(185, 28, 28, 0.12);
 }
 
 .glass-panel.highlight-cyan {
-  border-color: var(--border-cyan);
-  box-shadow: 0 8px 30px rgba(6, 182, 212, 0.12);
+  border-color: var(--color-info);
+  box-shadow: 0 8px 30px rgba(59, 130, 246, 0.12);
 }
 
 /* Buttons */
@@ -152,48 +169,49 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--crimson-500), var(--crimson-600));
-  color: white;
-  box-shadow: 0 4px 14px var(--crimson-glow);
+  background: var(--color-primary);
+  color: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(185, 28, 28, 0.2);
 }
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #f87171, var(--crimson-500));
-  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
+  background: var(--color-primary-hover);
+  box-shadow: 0 6px 20px rgba(185, 28, 28, 0.3);
   transform: translateY(-1px);
 }
 
 .btn-cyan {
-  background: linear-gradient(135deg, var(--cyan-500), #0284c7);
-  color: white;
-  box-shadow: 0 4px 14px var(--cyan-glow);
+  background: var(--color-info);
+  color: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.2);
 }
 .btn-cyan:hover:not(:disabled) {
+  background: #2563EB;
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(6, 182, 212, 0.4);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.3);
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-main);
-  border-color: var(--border-subtle);
+  background: #F1F5F9;
+  color: var(--color-text-main);
+  border-color: var(--color-border);
 }
 .btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: #E2E8F0;
+  border-color: #CBD5E1;
 }
 
 .btn-danger-outline {
-  background: rgba(239, 68, 68, 0.1);
-  color: #fca5a5;
-  border-color: rgba(239, 68, 68, 0.35);
+  background: transparent;
+  color: var(--color-critical);
+  border-color: var(--color-critical);
+  border: 1px solid var(--color-critical);
 }
 .btn-danger-outline:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.25);
-  border-color: var(--crimson-500);
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
   transform: none !important;
 }
@@ -202,7 +220,7 @@ body {
 .input-field, .select-field {
   width: 100%;
   padding: 0.65rem 0.9rem;
-  background: rgba(10, 13, 20, 0.8);
+  background: #FFFFFF;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   color: var(--text-main);
@@ -213,8 +231,8 @@ body {
 }
 
 .input-field:focus, .select-field:focus {
-  border-color: var(--cyan-500);
-  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.2);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.15);
 }
 
 /* Badges */
@@ -231,33 +249,33 @@ body {
 }
 
 .badge-red {
-  background: rgba(239, 68, 68, 0.15);
-  color: #fca5a5;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: #FEE2E2;
+  color: var(--color-critical);
+  border: 1px solid #FECACA;
 }
 
 .badge-cyan {
-  background: rgba(6, 182, 212, 0.15);
-  color: #a5f3fc;
-  border: 1px solid rgba(6, 182, 212, 0.3);
+  background: #DBEAFE;
+  color: var(--color-info);
+  border: 1px solid #BFDBFE;
 }
 
 .badge-green {
-  background: rgba(16, 185, 129, 0.15);
-  color: #6ee7b7;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: #DCFCE7;
+  color: var(--color-success);
+  border: 1px solid #BBF7D0;
 }
 
 .badge-amber {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fde68a;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: #FEF3C7;
+  color: var(--color-warning);
+  border: 1px solid #FDE68A;
 }
 
 .badge-purple {
-  background: rgba(192, 132, 252, 0.15);
-  color: #e9d5ff;
-  border: 1px solid rgba(192, 132, 252, 0.3);
+  background: #F3E8FF;
+  color: #7E22CE;
+  border: 1px solid #E9D5FF;
 }
 
 /* Pulse Dot */
@@ -265,12 +283,12 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--emerald-400);
-  box-shadow: 0 0 8px var(--emerald-400);
+  background: var(--color-success);
+  box-shadow: 0 0 8px var(--color-success);
   animation: radarSweep 2s infinite ease-in-out;
 }
 
 .pulse-dot.pulse-red {
-  background: var(--crimson-500);
-  box-shadow: 0 0 8px var(--crimson-500);
+  background: var(--color-critical);
+  box-shadow: 0 0 8px var(--color-critical);
 }

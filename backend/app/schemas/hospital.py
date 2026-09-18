@@ -25,3 +25,16 @@ class HospitalOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class HospitalDirectoryOut(BaseModel):
+    """Facility directory entry — enough to identify and target a hospital, no contact PII."""
+
+    id: str
+    name: str
+    address: str
+    is_accredited: bool
+    latitude: float
+    longitude: float
+
+    model_config = ConfigDict(from_attributes=True)
