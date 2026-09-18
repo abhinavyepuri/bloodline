@@ -58,6 +58,7 @@ app.add_exception_handler(DomainException, domain_exception_handler)
 # Include API v1 and WebSocket gateways
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router, prefix=f"{settings.API_V1_STR}/realtime")
+app.include_router(ws_router, prefix="")
 
 
 @app.get("/health", tags=["Health"])

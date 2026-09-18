@@ -1,8 +1,9 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, ConfigDict
 from app.models.inventory import BloodComponentType
 from app.models.request import TriageLevel, RequestStatus
+from app.schemas.allocation import AllocationOut
 
 
 class BloodRequestCreate(BaseModel):
@@ -26,5 +27,6 @@ class BloodRequestOut(BaseModel):
     deadline_at: datetime
     status: RequestStatus
     created_at: datetime
+    allocations: List[AllocationOut] = []
 
     model_config = ConfigDict(from_attributes=True)

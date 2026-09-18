@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import auth, requests, donors, inventory, audit
+from app.api.v1 import auth, requests, donors, inventory, audit, admin
 
 api_router = APIRouter()
 
@@ -8,3 +8,4 @@ api_router.include_router(requests.router, prefix="/requests", tags=["Emergency 
 api_router.include_router(donors.router, prefix="/donors", tags=["Donors & Dispatch"])
 api_router.include_router(inventory.router, prefix="/inventory", tags=["Blood Bank Inventory"])
 api_router.include_router(audit.router, prefix="/audit", tags=["Explainability & Audit Logs"])
+api_router.include_router(admin.router, prefix="/admin", tags=["System Administration & Demo"])
