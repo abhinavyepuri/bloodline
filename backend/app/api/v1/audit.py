@@ -20,7 +20,7 @@ async def get_request_explanation(id: str, db: AsyncSession = Depends(get_db)):
     logs = list(res.scalars().all())
     if not logs:
         raise HTTPException(status_code=404, detail="No audit logs available for this request")
-    return logs
+    return [AllocationAuditLogOut.model_validate(log) for log in logs]
 
 
 @router.get("/logs", response_model=List[AllocationAuditLogOut])
@@ -32,4 +32,5 @@ async def get_system_audit_logs(skip: int = 0, limit: int = 50, db: AsyncSession
         .offset(skip)
         .limit(limit)
     )
-    return list(res.scalars().all())
+    return [AllocationAuditLogOut.model_validate(log) for log in res.scalars().all()]
+

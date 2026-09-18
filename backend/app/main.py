@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import engine, Base
@@ -7,7 +9,6 @@ from app.core.redis import close_redis
 from app.core.exceptions import DomainException, domain_exception_handler
 from app.api.v1.router import api_router
 from app.websocket.routes import router as ws_router
-
 
 import logging
 
@@ -55,6 +56,40 @@ app.add_middleware(
 # Custom domain exception handler
 app.add_exception_handler(DomainException, domain_exception_handler)
 
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Strict JSON formatting for request body and query parameter validation errors."""
+    formatted_errors = []
+    for err in exc.errors():
+        loc = " -> ".join(str(item) for item in err.get("loc", []))
+        msg = err.get("msg", "Invalid input")
+        formatted_errors.append({"field": loc, "message": msg, "type": err.get("type")})
+
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error_type": "VALIDATION_ERROR",
+            "detail": formatted_errors,
+            "message": "Input validation failed. Please adhere strictly to the JSON schema."
+        }
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Strict JSON formatting for HTTPExceptions."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_type": "HTTP_ERROR",
+            "detail": exc.detail,
+            "status_code": exc.status_code
+        },
+        headers=exc.headers
+    )
+
+
 # Include API v1 and WebSocket gateways
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router, prefix=f"{settings.API_V1_STR}/realtime")
@@ -69,3 +104,4 @@ async def health_check():
         "service": settings.PROJECT_NAME,
         "environment": settings.ENVIRONMENT
     }
+

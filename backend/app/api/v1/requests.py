@@ -73,7 +73,7 @@ async def create_blood_request(
         "status": loaded_req.status.value
     })
 
-    return loaded_req
+    return BloodRequestOut.model_validate(loaded_req)
 
 
 @router.get("/{id}", response_model=BloodRequestOut)
@@ -87,7 +87,7 @@ async def get_blood_request(id: str, db: AsyncSession = Depends(get_db)):
     blood_req = result.scalars().first()
     if not blood_req:
         raise HTTPException(status_code=404, detail="Blood request not found")
-    return blood_req
+    return BloodRequestOut.model_validate(blood_req)
 
 
 @router.get("", response_model=List[BloodRequestOut])
@@ -100,7 +100,7 @@ async def list_blood_requests(skip: int = 0, limit: int = 50, db: AsyncSession =
         .offset(skip)
         .limit(limit)
     )
-    return list(res.scalars().all())
+    return [BloodRequestOut.model_validate(r) for r in res.scalars().all()]
 
 
 @router.patch("/{id}/cancel", response_model=BloodRequestOut)
@@ -129,7 +129,7 @@ async def cancel_blood_request(
         "status": blood_req.status.value
     })
 
-    return blood_req
+    return BloodRequestOut.model_validate(blood_req)
 
 
 @router.post("/{id}/fulfill", response_model=BloodRequestOut)
@@ -164,4 +164,4 @@ async def fulfill_blood_request(
         "message": f"Blood request {blood_req.id[:8]} successfully fulfilled."
     })
 
-    return blood_req
+    return BloodRequestOut.model_validate(blood_req)

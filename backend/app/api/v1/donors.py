@@ -6,9 +6,10 @@ from app.core.database import get_db
 from app.models.user import User
 from app.models.donor import Donor
 from app.models.request import BloodRequest, RequestStatus
+from app.models.allocation import Allocation, AllocationStatus
 from app.schemas.donor import DonorUpdateAvailability, DonorOut
+from app.schemas.allocation import DonorRespondRequest, DonorRespondOut
 from app.schemas.request import BloodRequestOut
-from app.schemas.allocation import DonorRespondRequest
 from app.services.allocation_service import AllocationService
 from app.api.deps import get_current_user
 from app.services.matching_service import MatchingEngineService
@@ -27,7 +28,7 @@ async def get_current_donor_profile(
     donor = res.scalars().first()
     if not donor:
         raise HTTPException(status_code=404, detail="Donor profile not found")
-    return donor
+    return DonorOut.model_validate(donor)
 
 
 @router.get("", response_model=List[DonorOut])
@@ -37,7 +38,7 @@ async def list_donors(
 ):
     """[USER-FACING] List registered donors (for Coordinator/Admin)."""
     res = await db.execute(select(Donor).order_by(Donor.reliability_score.desc()))
-    return list(res.scalars().all())
+    return [DonorOut.model_validate(d) for d in res.scalars().all()]
 
 
 @router.patch("/availability", response_model=DonorOut)
@@ -69,7 +70,7 @@ async def update_donor_availability(
         "longitude": donor.longitude
     })
 
-    return donor
+    return DonorOut.model_validate(donor)
 
 
 @router.get("/requests/active", response_model=List[BloodRequestOut])
@@ -98,12 +99,12 @@ async def get_active_emergency_alerts(
     for r in all_active:
         compatible_groups = MatchingEngineService.get_compatible_donor_types(r.required_blood_group)
         if donor.blood_group in compatible_groups:
-            compatible_requests.append(r)
+            compatible_requests.append(BloodRequestOut.model_validate(r))
 
     return compatible_requests
 
 
-@router.post("/requests/{id}/respond")
+@router.post("/requests/{id}/respond", response_model=DonorRespondOut)
 async def respond_to_emergency_dispatch(
     id: str,
     resp: DonorRespondRequest,
@@ -122,4 +123,4 @@ async def respond_to_emergency_dispatch(
         donor_id=donor.id,
         action=resp.action
     )
-    return result
+    return DonorRespondOut.model_validate(result)

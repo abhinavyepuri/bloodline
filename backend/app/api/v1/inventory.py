@@ -27,14 +27,14 @@ async def list_inventory(
     if not bank:
         # Fallback: list all for coordinator/admin/hospital
         units_res = await db.execute(select(InventoryUnit).order_by(InventoryUnit.expiry_date.asc()))
-        return list(units_res.scalars().all())
+        return [InventoryUnitOut.model_validate(u) for u in units_res.scalars().all()]
 
     units_res = await db.execute(
         select(InventoryUnit)
         .where(InventoryUnit.blood_bank_id == bank.id)
         .order_by(InventoryUnit.expiry_date.asc())
     )
-    return list(units_res.scalars().all())
+    return [InventoryUnitOut.model_validate(u) for u in units_res.scalars().all()]
 
 
 @router.post("/units", response_model=InventoryUnitOut, status_code=status.HTTP_201_CREATED)
@@ -92,7 +92,7 @@ async def register_inventory_unit(
     for req in replan_requests:
         await alloc_svc.replan_request(req.id, trigger_reason=f"New inventory unit {unit.batch_number} added")
 
-    return unit
+    return InventoryUnitOut.model_validate(unit)
 
 
 @router.patch("/units/{id}/status", response_model=InventoryUnitOut)
@@ -150,4 +150,4 @@ async def update_unit_status(
                 trigger_reason=f"Unit {unit.batch_number} was quarantined/invalidated"
             )
 
-    return unit
+    return InventoryUnitOut.model_validate(unit)
