@@ -1,158 +1,155 @@
-# PS-1: Smart Blood & Emergency Donor Network
+# SmartBlood (Yarin) — Real-Time Emergency Blood & Donor Network
 
-A dynamic resource-allocation and emergency blood network connecting hospitals, blood banks, and verified donors with real-time proximity geofencing, first-ack atomic locking, and continuous re-planning.
+A real-time emergency blood coordination and voluntary donor dispatch platform connecting hospitals, blood banks, and verified voluntary donors with geospatial proximity geofencing, first-expiring-first-out (FEFO) cold-chain allocation, atomic first-ack hard locking, and automated re-planning upon resource failure.
 
 ---
 
-## 🏗️ System Architecture & Cross-Platform Flow
+## 🏗️ Architecture & Real-Time Flow
 
 ```text
-                 ┌──────────────────────────┐
-                 │   Android Mobile App     │
-                 │   Kotlin / Jetpack       │
-                 └────────────┬─────────────┘
-                              │ HTTPS / WSS
-                              │
-                 ┌────────────▼─────────────┐
-                 │      FASTAPI BACKEND     │
-                 │      Python 3.11+        │
-                 └────────────┬─────────────┘
-                              │
-                 ┌────────────▼─────────────┐
-                 │      API / v1 Router     │
-                 └────────────┬─────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        │                     │                     │
-        ▼                     ▼                     ▼
-   Auth Service         Request Service        Donor Service
-   JWT + RBAC           Triage & Intake        Eligibility & Proximity
-        │                     │                     │
-        ├─────────────────────┼─────────────────────┤
-        │                     │                     │
-        ▼                     ▼                     ▼
- Matching Engine       Allocation Engine      Inventory Service
- Priority Scoring      Proximity Broadcast    Blood Bank Units
- Compatibility         Atomic Hard Lock       FEFO Expiry Rules
-        │                     │                     │
-        └──────────────┬──────┴─────────────────────┘
-                       ▼
-             PostgreSQL 16 + PostGIS
-             (Spatial Indexing & Queries)
-                       │
-             ┌─────────┴─────────┐
-             ▼                   ▼
-           Redis 7         WebSocket Gateway
-         Locks & PubSub    Live Queue Sync
-             │                   │
-             └─────────┬─────────┘
-                       │
-       ┌───────────────┴───────────────┐
-       ▼                               ▼
-   Android App (Kotlin)          React Web (Vite + TS)
+       ┌─────────────────────────────────────────────────────────────┐
+       │                React 18 Web App (Vite + TS)                 │
+       │    Hospital Intake | Blood Bank Stock | Donor Dispatch      │
+       │                 Coordinator Live Queue                      │
+       └──────────────────────────────┬──────────────────────────────┘
+                                      │ HTTP / WSS
+                                      ▼
+       ┌─────────────────────────────────────────────────────────────┐
+       │                       FASTAPI BACKEND                       │
+       │            API v1 Gateway + Real-Time WebSocket             │
+       └──────────────────────────────┬──────────────────────────────┘
+                                      │
+         ┌────────────────────────────┼────────────────────────────┐
+         ▼                            ▼                            ▼
+   Auth & RBAC                 Request Service               Donor Service
+  (JWT Tokens)              (Triage & Urgency)           (Proximity Geofence)
+         │                            │                            │
+         ├────────────────────────────┼────────────────────────────┤
+         ▼                            ▼                            ▼
+   Matching Matrix            Allocation Engine            Inventory Service
+  (ABO/Rh Blood/Plasma)     (FEFO + First-Ack Lock)      (Cold-Chain Batches)
+         │                            │                            │
+         └─────────────────────┬──────┴────────────────────────────┘
+                               ▼
+                    PostgreSQL 16 + PostGIS
+                 (Spatial Queries: ST_DWithin)
+                               │
+               ┌───────────────┴───────────────┐
+               ▼                               ▼
+            Redis 7.2                  WebSocket Manager
+     (Atomic Distributed Locks)      (Multi-Client Push Bus)
 ```
 
 ---
 
-## 📁 Repository Structure
+## 🚀 Quickstart Guide: How to Run the Project
 
-```text
-yarin/
-├── ARCHITECTURE.md                  # Comprehensive System & Software Architecture Doc
-├── docker-compose.yml               # PostgreSQL+PostGIS, Redis, Backend orchestration
-├── README.md                        # Quickstart & setup guide
-│
-├── backend/                         # Production-grade FastAPI backend
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── app/
-│       ├── main.py                  # App entry point, CORS & Lifespan
-│       ├── core/                    # Config, DB async engine, Redis lock manager, Security
-│       │   ├── config.py
-│       │   ├── database.py
-│       │   ├── redis.py
-│       │   ├── security.py
-│       │   ├── permissions.py
-│       │   └── exceptions.py
-│       ├── models/                  # SQLAlchemy PostGIS ORM models
-│       │   ├── user.py
-│       │   ├── donor.py
-│       │   ├── hospital.py
-│       │   ├── blood_bank.py
-│       │   ├── inventory.py
-│       │   ├── request.py
-│       │   ├── allocation.py
-│       │   └── audit.py
-│       ├── schemas/                 # Pydantic v2 schemas
-│       ├── repositories/            # Data access layer (PostGIS spatial queries, row locks)
-│       ├── services/                # Business logic (Matching, Proximity Geofence, Allocation)
-│       ├── api/                     # Versioned REST APIs (v1)
-│       │   ├── v1/
-│       │   │   ├── auth.py
-│       │   │   ├── requests.py
-│       │   │   ├── donors.py
-│       │   │   ├── inventory.py
-│       │   │   └── audit.py
-│       │   └── deps.py
-│       └── websocket/               # Real-time WebSocket connection manager & routes
-│
-├── frontend/                        # React + TypeScript + Vite Dashboard
-└── mobile-android/                  # Kotlin Android Mobile App
+### 1. Prerequisites
+- **Docker & Docker Compose** (for PostgreSQL + PostGIS & Redis)
+- **Python 3.12+** (Python 3.13 supported)
+- **Node.js 18+** & **npm**
+
+---
+
+### 2. Step-by-Step Setup
+
+#### Step 1: Start Database and Redis Containers
+From the project root:
+```bash
+docker compose up -d db redis
 ```
+*Containers started:*
+- `smartblood_postgres` on port `5432`
+- `smartblood_redis` on port `6379`
 
 ---
 
-## 🚀 How to Run
+#### Step 2: Setup and Start Backend (FastAPI)
+Open a terminal in `backend/`:
+```bash
+cd backend
 
-### Option 1: Full Stack via Docker Compose (Recommended)
+# 1. Create Python virtual environment (if not already created)
+python -m venv venv
 
-1. **Start Database, Redis & Backend:**
-   ```bash
-   docker compose up --build
-   ```
-2. **Access Interactive API Docs:**
-   - Swagger UI: [http://localhost:8000/api/v1/docs](http://localhost:8000/api/v1/docs)
-   - ReDoc: [http://localhost:8000/api/v1/redoc](http://localhost:8000/api/v1/redoc)
-   - Health check: [http://localhost:8000/health](http://localhost:8000/health)
+# 2. Activate virtual environment
+# On Windows PowerShell:
+.\venv\Scripts\activate
+# On Linux/macOS:
+source venv/bin/activate
 
----
+# 3. Install dependencies
+pip install -r requirements.txt
 
-### Option 2: Running Backend Locally (Python)
+# 4. Verify/Initialize Database Tables
+python -m app.init_db
 
-1. **Create and activate virtual environment:**
-   ```bash
-   cd backend
-   python -m venv venv
-   # Windows:
-   .\venv\Scripts\activate
-   # Linux/macOS:
-   source venv/bin/activate
-   ```
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. **Configure Environment:**
-   ```bash
-   cp .env.example .env
-   ```
-4. **Start PostgreSQL & Redis (e.g. via Docker):**
-   ```bash
-   docker compose up db redis -d
-   ```
-5. **Run FastAPI Server:**
-   ```bash
-   uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-   ```
+# 5. Seed Synthetic Demo Data (Section 14 Scenario)
+python -m app.seed
+
+# 6. Start the FastAPI server
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+*Backend endpoints:*
+- REST API: `http://localhost:8000/api/v1`
+- Swagger Documentation: `http://localhost:8000/api/v1/docs`
+- Real-Time WebSocket: `ws://localhost:8000/api/v1/realtime/ws`
+- Health Check: `http://localhost:8000/health`
 
 ---
 
-### 📱 Connecting Android App (Kotlin) & React Web
+#### Step 3: Setup and Start Frontend (React + Vite)
+Open a second terminal in `frontend/`:
+```bash
+cd frontend
 
-* **Android App (Kotlin Emulator)**:
-  - Base URL for Android Emulator to access local backend: `http://10.0.2.2:8000/api/v1`
-  - WebSocket URL: `ws://10.0.2.2:8000/api/v1/realtime/ws`
-* **React Web Frontend**:
-  - Base URL: `http://localhost:8000/api/v1`
-  - WebSocket URL: `ws://localhost:8000/api/v1/realtime/ws`
+# 1. Install npm dependencies
+npm install
+
+# 2. Start the Vite development server
+npm run dev
+```
+Open **[http://localhost:5173/](http://localhost:5173/)** in your web browser.
+
+---
+
+## 👥 Pre-Configured Demo Accounts
+
+All accounts use the password: `password123`
+
+| Role | Email | Profile / Scenario Details |
+| :--- | :--- | :--- |
+| **Hospital Admin** | `hospital@smartblood.org` | Metro General Hospital (Emergency Intake & Live Tracking) |
+| **Blood Bank Staff** | `bloodbank@smartblood.org` | Metro Blood Services (~0.9km away; stock units `BB-001`, `BB-002`) |
+| **Donor Alice (D1)** | `alice@donor.org` | O- Donor (~2.1km away, reliability score 98%) |
+| **Donor Bob (D2)** | `bob@donor.org` | O- Donor (~3.8km away, reliability score 92%) |
+| **Coordinator** | `coordinator@smartblood.org` | Emergency Operations Center (City-wide Queue & Demo Controller) |
+
+> 💡 **Tip:** Use the instant **"SWITCH VIEW"** pills in the top header of the web app to switch between roles with a single click.
+
+---
+
+## 🧪 Testing & Verification
+
+### Run Backend Unit Tests (Pytest)
+```bash
+cd backend
+.\venv\Scripts\python.exe -m pytest -v tests/
+```
+*Tests cover biological ABO/Rh compatibility, clinical urgency calculation, geospatial proximity scoring, and automated inventory reservation.*
+
+### Run End-to-End Section 14 Demo Automation
+```bash
+cd backend
+.\venv\Scripts\python.exe verify_demo.py
+```
+*Executes the full 10-step lifecycle (Request RA multi-unit reservation, Request RB donor broadcast, Unit BB-001 contamination failure, and Donor D1 First-Ack re-planning recovery).*
+
+---
+
+## 🎬 How to Run the Live Interactive Demo
+
+1. Open **[http://localhost:5173/](http://localhost:5173/)**
+2. In the **Coordinator Ops** view, locate the **Section 14 End-to-End Synthetic Demo Controller** at the top.
+3. Click **`▶ Run Full Section 14 Flow`** to watch the automated sequence execute with live commentary.
+4. Watch the real-time reactions across the live queue and the event telemetry ticker!
