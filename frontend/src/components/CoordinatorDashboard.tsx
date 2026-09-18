@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../context/AuthContext';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useWebSocket } from '../context/WebSocketContext';
-import { BloodRequest, AllocationAuditLog } from '../types';
-import { Radio, Play, RotateCcw, Activity, Zap, Info } from 'lucide-react';
+import { api, loginRequest } from '../lib/api';
+import { BloodRequest, HospitalDirectoryEntry, AllocationAuditLog, InventoryUnit } from '../types';
+import { Radio, Play, RotateCcw, Activity, Zap, Info, X } from 'lucide-react';
 
 const formatEventMessage = (ev: any): string => {
   if (ev.message) return ev.message;
@@ -54,43 +54,55 @@ const formatStatusText = (status: string): string => {
   }
 };
 
+/** Plain-English summary of how much of a request is actually covered. */
+const describeCoverage = (req: BloodRequest): string => {
+  const covered = req.units_covered ?? 0;
+  if (covered >= req.units_requested) return `all ${req.units_requested} bag(s) covered`;
+  if (covered === 0) return `no bags covered yet (needs ${req.units_requested})`;
+  return `${covered} of ${req.units_requested} bag(s) covered, ${req.units_shortfall} still needed`;
+};
+
 export const CoordinatorDashboard: React.FC = () => {
-  const { token } = useAuth();
   const { events, lastEvent } = useWebSocket();
 
   const [requests, setRequests] = useState<BloodRequest[]>([]);
+  const [hospitals, setHospitals] = useState<HospitalDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [demoStep, setDemoStep] = useState<number>(0);
   const [demoLog, setDemoLog] = useState<string[]>([]);
   const [isAutoRunning, setIsAutoRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Selected audit inspection
   const [selectedAuditLog, setSelectedAuditLog] = useState<AllocationAuditLog[] | null>(null);
 
-  const fetchRequests = async () => {
+  const fetchRequests = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/api/v1/requests');
-      if (res.ok) {
-        const data = await res.json();
-        setRequests(data);
-      }
+      setRequests(await api.get<BloodRequest[]>('/requests'));
     } catch (err) {
       console.error('Failed to fetch requests:', err);
+      setError(err instanceof Error ? err.message : 'Could not load requests.');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchRequests();
-  }, []);
+    // Coordinators raise demo requests on behalf of a named facility, so the
+    // directory has to be loaded before Step 1 can run.
+    api
+      .get<HospitalDirectoryEntry[]>('/hospitals')
+      .then(setHospitals)
+      .catch((err) => console.error('Failed to load hospital directory:', err));
+  }, [fetchRequests]);
 
   useEffect(() => {
     if (lastEvent) {
       fetchRequests();
     }
-  }, [lastEvent]);
+  }, [lastEvent, fetchRequests]);
 
   const addDemoLog = (msg: string) => {
     setDemoLog((prev) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev.slice(0, 20)]);
@@ -98,119 +110,132 @@ export const CoordinatorDashboard: React.FC = () => {
 
   const handleResetSeed = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/v1/admin/reset-seed', { method: 'POST' });
-      if (res.ok) {
-        setDemoStep(0);
-        addDemoLog('System reset: All requests cleared, blood bank restocked with fresh blood bags.');
-        await fetchRequests();
-      }
+      await api.post('/admin/reset-seed');
+      setDemoStep(0);
+      addDemoLog('System reset: All requests cleared, blood bank restocked with fresh blood bags.');
+      await fetchRequests();
     } catch (err) {
-      console.error('Failed to reset database:', err);
+      const message = err instanceof Error ? err.message : 'Reset failed.';
+      addDemoLog(`Could not reset: ${message}`);
+      setError(message);
     }
+  };
+
+  /**
+   * Raise a request as a coordinator.
+   *
+   * Coordinators have no hospital profile of their own, so the server requires an
+   * explicit `hospital_id`; we use the first facility in the directory.
+   */
+  const createDemoRequest = async (payload: Record<string, unknown>): Promise<BloodRequest> => {
+    if (hospitals.length === 0) {
+      throw new Error('No hospitals are registered yet, so the demo cannot raise a request.');
+    }
+    return api.post<BloodRequest>('/requests', { ...payload, hospital_id: hospitals[0].id });
   };
 
   // Demo Flow Steps in plain English
   const executeStep1 = async () => {
     addDemoLog('Step 1: Hospital asks for 2 bags of O- blood for an urgent surgery...');
     try {
-      const res = await fetch('http://localhost:8000/api/v1/requests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          patient_id_token: 'PATIENT-EMERGENCY-1',
-          required_blood_group: 'O-',
-          component_type: 'PRBC',
-          units_requested: 2,
-          triage_level: 'MASSIVE_TRANSFUSION_PROTOCOL',
-          deadline_at: new Date(Date.now() + 15 * 60000).toISOString(),
-        }),
+      const created = await createDemoRequest({
+        patient_id_token: 'PATIENT-EMERGENCY-1',
+        required_blood_group: 'O-',
+        component_type: 'PRBC',
+        units_requested: 2,
+        triage_level: 'MASSIVE_TRANSFUSION_PROTOCOL',
+        deadline_at: new Date(Date.now() + 15 * 60000).toISOString(),
       });
-      const data = await res.json();
-      addDemoLog(`Success: Blood bank had 2 bags (BB-001 & BB-002). Both bags reserved and en route to hospital.`);
+      // Report what actually happened rather than assuming the pipeline succeeded.
+      addDemoLog(`Blood bank response: ${describeCoverage(created)}.`);
       setDemoStep(1);
+      await fetchRequests();
     } catch (err) {
-      addDemoLog(`Error in Step 1: ${err}`);
+      addDemoLog(`Error in Step 1: ${err instanceof Error ? err.message : err}`);
     }
   };
 
   const executeStep2 = async () => {
     addDemoLog('Step 2: Another patient arrives needing 1 bag of O- blood...');
     try {
-      const res = await fetch('http://localhost:8000/api/v1/requests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          patient_id_token: 'PATIENT-EMERGENCY-2',
-          required_blood_group: 'O-',
-          component_type: 'PRBC',
-          units_requested: 1,
-          triage_level: 'ACTIVE_TRAUMA',
-          deadline_at: new Date(Date.now() + 45 * 60000).toISOString(),
-        }),
+      const created = await createDemoRequest({
+        patient_id_token: 'PATIENT-EMERGENCY-2',
+        required_blood_group: 'O-',
+        component_type: 'PRBC',
+        units_requested: 1,
+        triage_level: 'ACTIVE_TRAUMA',
+        deadline_at: new Date(Date.now() + 45 * 60000).toISOString(),
       });
-      const data = await res.json();
-      addDemoLog(`Blood bank freezers are now empty! The system automatically buzzed nearby volunteer donors Alice & Bob on their phones.`);
+      if ((created.units_covered ?? 0) === 0) {
+        addDemoLog(
+          'Blood bank freezers are empty. The system buzzed nearby volunteer donors on their phones.'
+        );
+      } else {
+        addDemoLog(`Blood bank covered this one from storage: ${describeCoverage(created)}.`);
+      }
       setDemoStep(2);
+      await fetchRequests();
     } catch (err) {
-      addDemoLog(`Error in Step 2: ${err}`);
+      addDemoLog(`Error in Step 2: ${err instanceof Error ? err.message : err}`);
     }
   };
 
   const executeStep3 = async () => {
     addDemoLog('Step 3: Blood bank discovers Bag BB-001 is spoiled/damaged...');
     try {
-      const invRes = await fetch('http://localhost:8000/api/v1/inventory', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const invData = await invRes.json();
-      const bb001 = invData.find((u: any) => u.batch_number === 'BB-001');
+      const inventory = await api.get<InventoryUnit[]>('/inventory');
+      const bb001 = inventory.find((u) => u.batch_number === 'BB-001');
+      if (!bb001) throw new Error('BB-001 unit not found in stock');
 
-      if (!bb001) throw new Error('BB-001 unit not found');
+      await api.patch(`/inventory/units/${bb001.id}/status`, { status: 'QUARANTINED' });
 
-      await fetch(`http://localhost:8000/api/v1/inventory/units/${bb001.id}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status: 'QUARANTINED' }),
-      });
-
-      addDemoLog('Bag BB-001 marked as spoiled. The hospital still needs 1 bag! The system automatically alerts volunteer donors for an emergency replacement.');
+      addDemoLog(
+        'Bag BB-001 marked as spoiled. The system automatically alerts volunteer donors for an emergency replacement.'
+      );
       setDemoStep(3);
+      await fetchRequests();
     } catch (err) {
-      addDemoLog(`Error in Step 3: ${err}`);
+      addDemoLog(`Error in Step 3: ${err instanceof Error ? err.message : err}`);
     }
   };
 
   const executeStep4 = async () => {
     addDemoLog('Step 4: Volunteer Donor Alice opens her phone and clicks ACCEPT...');
     try {
-      const reqRes = await fetch('http://localhost:8000/api/v1/requests');
-      const allReqs = await reqRes.json();
-      const reqRA = allReqs.find((r: any) => r.patient_id_token === 'PATIENT-EMERGENCY-1');
+      const allReqs = await api.get<BloodRequest[]>('/requests');
+      const reqRA = allReqs.find((r) => r.patient_id_token === 'PATIENT-EMERGENCY-1');
+      if (!reqRA) throw new Error('Request PATIENT-EMERGENCY-1 not found');
 
-      if (!reqRA) throw new Error('Request not found');
-
-      const loginRes = await fetch('http://localhost:8000/api/v1/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'alice@donor.org', password: 'password123' }),
-      });
-      const loginData = await loginRes.json();
-
-      await fetch(`http://localhost:8000/api/v1/donors/requests/${reqRA.id}/respond`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginData.access_token}` },
-        body: JSON.stringify({ action: 'ACCEPT' }),
+      // Sign in as the donor purely to obtain a donor token; the coordinator's own
+      // session is left untouched because we pass this token per-request.
+      const donorLogin = await loginRequest<{ access_token: string }>('/auth/login', {
+        email: 'alice@donor.org',
+        password: 'password123',
       });
 
-      addDemoLog(`Alice agreed to donate! Hospital now has: 1 bag from blood bank + 1 donation from Alice. The patient is saved!`);
+      await api.post(
+        `/donors/requests/${reqRA.id}/respond`,
+        { action: 'ACCEPT' },
+        { token: donorLogin.access_token }
+      );
+
+      const refreshed = await api.get<BloodRequest[]>('/requests');
+      const updated = refreshed.find((r) => r.id === reqRA.id);
+      addDemoLog(
+        updated
+          ? `Alice agreed to donate! Request now has ${describeCoverage(updated)}.`
+          : 'Alice agreed to donate!'
+      );
       setDemoStep(4);
+      await fetchRequests();
     } catch (err) {
-      addDemoLog(`Error in Step 4: ${err}`);
+      addDemoLog(`Error in Step 4: ${err instanceof Error ? err.message : err}`);
     }
   };
 
   const runFullDemoSequence = async () => {
     setIsAutoRunning(true);
+    setError(null);
     await handleResetSeed();
     await new Promise((r) => setTimeout(r, 1200));
 
@@ -229,13 +254,10 @@ export const CoordinatorDashboard: React.FC = () => {
 
   const inspectExplanation = async (id: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/audit/requests/${id}/explanation`);
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedAuditLog(data);
-      }
+      setSelectedAuditLog(await api.get<AllocationAuditLog[]>(`/audit/requests/${id}/explanation`));
     } catch (err) {
       console.error(err);
+      setError(err instanceof Error ? err.message : 'Could not load the explanation.');
     }
   };
 
@@ -323,13 +345,13 @@ export const CoordinatorDashboard: React.FC = () => {
 
         {/* Live Step Execution Console in Plain English */}
         <div style={{
-          background: 'rgba(5, 7, 12, 0.85)',
+          background: 'var(--color-bg)',
           padding: '0.85rem',
           borderRadius: '8px',
           fontSize: '0.85rem',
           maxHeight: '130px',
           overflowY: 'auto',
-          border: '1px solid rgba(255,255,255,0.06)'
+          border: '1px solid var(--color-border)'
         }}>
           {demoLog.length === 0 ? (
             <span style={{ color: 'var(--text-dim)' }}>Ready to run. Click "Run Automatic Test" above to see the magic happen!</span>
@@ -342,6 +364,30 @@ export const CoordinatorDashboard: React.FC = () => {
           )}
         </div>
       </div>
+
+      {error && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.15)',
+          border: '1px solid var(--crimson-500)',
+          padding: '0.75rem 1rem',
+          borderRadius: '8px',
+          marginBottom: '1.5rem',
+          fontSize: '0.85rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '0.75rem',
+        }}>
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Main Operational Split View */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1.5rem' }}>
@@ -361,6 +407,7 @@ export const CoordinatorDashboard: React.FC = () => {
                 <tr style={{ borderBottom: '1px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
                   <th style={{ padding: '0.65rem' }}>PATIENT CODE</th>
                   <th style={{ padding: '0.65rem' }}>BLOOD NEEDED</th>
+                  <th style={{ padding: '0.65rem' }}>BAGS COVERED</th>
                   <th style={{ padding: '0.65rem' }}>URGENCY (0-100)</th>
                   <th style={{ padding: '0.65rem' }}>CURRENT STATUS</th>
                   <th style={{ padding: '0.65rem' }}>WHERE BLOOD IS SOURCED</th>
@@ -370,62 +417,72 @@ export const CoordinatorDashboard: React.FC = () => {
               <tbody>
                 {requests.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-dim)' }}>
+                    <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-dim)' }}>
                       No active requests right now.
                     </td>
                   </tr>
                 ) : (
-                  requests.map((req) => (
-                    <tr key={req.id} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)' }}>
-                      <td style={{ padding: '0.65rem' }}>
-                        <div style={{ fontWeight: 700, color: 'white' }}>{req.patient_id_token}</div>
-                      </td>
-                      <td style={{ padding: '0.65rem' }}>
-                        <span style={{ fontWeight: 700, color: 'var(--crimson-500)' }}>
-                          {req.units_requested}x {req.required_blood_group}
-                        </span>
-                      </td>
-                      <td style={{ padding: '0.65rem', fontWeight: 800, color: req.calculated_urgency_score >= 80 ? 'var(--crimson-500)' : 'var(--cyan-400)' }}>
-                        {req.calculated_urgency_score.toFixed(0)}
-                      </td>
-                      <td style={{ padding: '0.65rem' }}>
-                        <span className={`badge ${
-                          req.status === 'COMMITTED_IN_TRANSIT'
-                            ? 'badge-green'
-                            : req.status === 'RE_PLANNING'
-                            ? 'badge-red'
-                            : req.status === 'PROXIMITY_ZONE_NOTIFIED'
-                            ? 'badge-amber'
-                            : req.status === 'FULFILLED'
-                            ? 'badge-purple'
-                            : 'badge-cyan'
-                        }`}>
-                          {formatStatusText(req.status)}
-                        </span>
-                      </td>
-                      <td style={{ padding: '0.65rem', fontSize: '0.78rem' }}>
-                        {req.allocations && req.allocations.length > 0 ? (
-                          req.allocations.map((a, i) => (
-                            <div key={i} style={{ color: a.source_type === 'BLOOD_BANK_INVENTORY' ? '#93c5fd' : '#86efac' }}>
-                              • {a.source_type === 'BLOOD_BANK_INVENTORY' ? 'From Blood Bank Storage' : 'From Volunteer Donor'}
-                            </div>
-                          ))
-                        ) : (
-                          <span style={{ color: 'var(--text-dim)' }}>Searching...</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '0.65rem', textAlign: 'right' }}>
-                        <button
-                          onClick={() => inspectExplanation(req.id)}
-                          className="btn btn-secondary"
-                          style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
-                        >
-                          <Info size={12} />
-                          Explain
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                  requests.map((req) => {
+                    const covered = req.units_covered ?? 0;
+                    const complete = covered >= req.units_requested;
+                    return (
+                      <tr key={req.id} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)' }}>
+                        <td style={{ padding: '0.65rem' }}>
+                          <div style={{ fontWeight: 700, color: 'white' }}>{req.patient_id_token}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                            {req.hospital_name ?? 'Unknown hospital'}
+                          </div>
+                        </td>
+                        <td style={{ padding: '0.65rem' }}>
+                          <span style={{ fontWeight: 700, color: 'var(--crimson-500)' }}>
+                            {req.units_requested}x {req.required_blood_group}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.65rem', fontWeight: 700, color: complete ? 'var(--emerald-400)' : 'var(--amber-500)' }}>
+                          {covered} / {req.units_requested}
+                        </td>
+                        <td style={{ padding: '0.65rem', fontWeight: 800, color: req.calculated_urgency_score >= 80 ? 'var(--crimson-500)' : 'var(--cyan-400)' }}>
+                          {req.calculated_urgency_score.toFixed(0)}
+                        </td>
+                        <td style={{ padding: '0.65rem' }}>
+                          <span className={`badge ${
+                            req.status === 'COMMITTED_IN_TRANSIT'
+                              ? 'badge-green'
+                              : req.status === 'RE_PLANNING'
+                              ? 'badge-red'
+                              : req.status === 'PROXIMITY_ZONE_NOTIFIED'
+                              ? 'badge-amber'
+                              : req.status === 'FULFILLED'
+                              ? 'badge-purple'
+                              : 'badge-cyan'
+                          }`}>
+                            {formatStatusText(req.status)}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.65rem', fontSize: '0.78rem' }}>
+                          {req.allocations && req.allocations.length > 0 ? (
+                            req.allocations.map((a, i) => (
+                              <div key={i} style={{ color: a.source_type === 'BLOOD_BANK_INVENTORY' ? 'var(--color-info)' : 'var(--color-success)' }}>
+                                • {a.source_type === 'BLOOD_BANK_INVENTORY' ? 'From Blood Bank Storage' : 'From Volunteer Donor'}
+                              </div>
+                            ))
+                          ) : (
+                            <span style={{ color: 'var(--text-dim)' }}>Searching...</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '0.65rem', textAlign: 'right' }}>
+                          <button
+                            onClick={() => inspectExplanation(req.id)}
+                            className="btn btn-secondary"
+                            style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                          >
+                            <Info size={12} />
+                            Explain
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -454,7 +511,7 @@ export const CoordinatorDashboard: React.FC = () => {
                   <div
                     key={i}
                     style={{
-                      background: 'rgba(10, 13, 20, 0.8)',
+                      background: 'var(--color-bg)',
                       padding: '0.75rem 0.85rem',
                       borderRadius: '8px',
                       border: '1px solid var(--border-subtle)',
@@ -475,7 +532,7 @@ export const CoordinatorDashboard: React.FC = () => {
                         {new Date().toLocaleTimeString()}
                       </span>
                     </div>
-                    <div style={{ color: '#f3f4f6', fontSize: '0.85rem', lineHeight: 1.35 }}>
+                    <div style={{ color: 'var(--color-text-main)', fontSize: '0.85rem', lineHeight: 1.35 }}>
                       {messageText}
                     </div>
                   </div>
@@ -488,38 +545,49 @@ export const CoordinatorDashboard: React.FC = () => {
 
       {/* Audit Modal in Plain English */}
       {selectedAuditLog && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
-          backdropFilter: 'blur(8px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 100,
-          padding: '1rem',
-        }}>
-          <div className="glass-panel" style={{ maxWidth: '600px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+        <div
+          onClick={() => setSelectedAuditLog(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '1rem',
+          }}
+        >
+          <div
+            className="glass-panel"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '600px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Decision Explanation</h3>
               <button onClick={() => setSelectedAuditLog(null)} className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem' }}>
                 ✕
               </button>
             </div>
-            {selectedAuditLog.map((log) => (
-              <div key={log.id} style={{ background: 'rgba(10, 13, 20, 0.7)', padding: '0.85rem', borderRadius: '8px', marginBottom: '0.75rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
-                  <span className="badge badge-cyan">{formatStatusText(log.decision_type)}</span>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{new Date(log.created_at).toLocaleTimeString()}</span>
+            {selectedAuditLog.length === 0 ? (
+              <p style={{ color: 'var(--text-muted)' }}>No audit trail entries recorded yet.</p>
+            ) : (
+              selectedAuditLog.map((log) => (
+                <div key={log.id} style={{ background: 'var(--color-bg)', padding: '0.85rem', borderRadius: '8px', marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                    <span className="badge badge-cyan">{formatStatusText(log.decision_type)}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{new Date(log.created_at).toLocaleTimeString()}</span>
+                  </div>
+                  <p style={{ fontSize: '0.88rem', color: 'var(--color-text-main)', marginBottom: '0.5rem', lineHeight: 1.4 }}>
+                    {log.rationale_summary}
+                  </p>
                 </div>
-                <p style={{ fontSize: '0.88rem', color: '#f3f4f6', marginBottom: '0.5rem', lineHeight: 1.4 }}>
-                  {log.rationale_summary}
-                </p>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       )}

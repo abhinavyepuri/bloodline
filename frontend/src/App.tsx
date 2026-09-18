@@ -2,6 +2,7 @@ import React from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { WebSocketProvider, useWebSocket } from './context/WebSocketContext';
 import { Header } from './components/Header';
+import { LoginScreen } from './components/LoginScreen';
 import { HospitalDashboard } from './components/HospitalDashboard';
 import { BloodBankDashboard } from './components/BloodBankDashboard';
 import { DonorDashboard } from './components/DonorDashboard';
@@ -91,12 +92,12 @@ const DashboardSwitch: React.FC = () => {
         textAlign: 'center',
         fontSize: '0.75rem',
         color: 'var(--text-dim)',
-        background: 'rgba(10, 13, 20, 0.8)',
+        background: 'var(--color-bg)',
       }}>
         <p>
           SmartBlood (Yarin) Emergency Blood Logistics Platform • Built with FastAPI, PostgreSQL + PostGIS, Redis & WebSockets
         </p>
-        <p style={{ marginTop: '0.35rem', color: 'rgba(255, 255, 255, 0.3)' }}>
+        <p style={{ marginTop: '0.35rem', color: 'var(--text-muted)' }}>
           Prototype demonstration. All donor coordinates, hospital identities, and patient tokens are synthetically generated.
         </p>
       </footer>
@@ -107,11 +108,46 @@ const DashboardSwitch: React.FC = () => {
 export function App() {
   return (
     <AuthProvider>
-      <WebSocketProvider>
-        <DashboardSwitch />
-      </WebSocketProvider>
+      <AppShell />
     </AuthProvider>
   );
 }
+
+/**
+ * Chooses between the login screen and the dashboards.
+ *
+ * The WebSocket provider sits below the auth gate on purpose: a socket needs a token
+ * to authenticate with, and it should not be opened at all while signed out.
+ */
+const AppShell: React.FC = () => {
+  const { token, isBootstrapping } = useAuth();
+
+  if (isBootstrapping) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--text-muted)',
+          fontSize: '0.9rem',
+        }}
+      >
+        Restoring your session…
+      </div>
+    );
+  }
+
+  if (!token) {
+    return <LoginScreen />;
+  }
+
+  return (
+    <WebSocketProvider>
+      <DashboardSwitch />
+    </WebSocketProvider>
+  );
+};
 
 export default App;

@@ -37,6 +37,16 @@ class AllocationStatus(str, Enum):
         return super()._missing_(value)
 
 
+# Allocation states that mean a unit is genuinely secured for the request. Both the
+# allocation service and the request model derive coverage from this single tuple so
+# the two can never disagree about what "covered" means.
+COVERING_ALLOCATION_STATUSES = (
+    AllocationStatus.HARD_LOCKED,
+    AllocationStatus.IN_TRANSIT,
+    AllocationStatus.COMPLETED,
+)
+
+
 
 class Allocation(TimestampedModel):
     __tablename__ = "allocations"

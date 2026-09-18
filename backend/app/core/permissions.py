@@ -1,6 +1,4 @@
 from enum import Enum
-from typing import List
-from fastapi import HTTPException, status
 
 
 class UserRole(str, Enum):
@@ -20,17 +18,9 @@ class UserRole(str, Enum):
         return super()._missing_(value)
 
 
-class RoleChecker:
-    """Dependency for enforcing Role-Based Access Control on endpoints."""
-
-    def __init__(self, allowed_roles: List[UserRole]):
-        self.allowed_roles = [r.value for r in allowed_roles]
-
-    def __call__(self, current_user_role: str):
-        normalized_role = str(current_user_role).strip().upper()
-        if normalized_role not in self.allowed_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Operation not permitted for role: {current_user_role}"
-            )
+# Role enforcement lives in ``app.api.deps.require_roles``, which is a real FastAPI
+# dependency and therefore cannot be forgotten the way the old ``RoleChecker`` could —
+# it used to be instantiated and called by hand at the top of an endpoint body, so
+# omitting the call silently left the route open. It is not defined here because
+# ``deps`` imports this module, and the reverse import would be circular.
 

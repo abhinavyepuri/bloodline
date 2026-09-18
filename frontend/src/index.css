@@ -1,38 +1,52 @@
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
 :root {
-  /* User-Provided 4-Color Palette */
-  --palette-light-lime: #DEEC9E;
-  --palette-sage-green: #A1C979;
-  --palette-ocean-teal: #22667C;
-  --palette-midnight-navy: #0C3A60;
+  /* Medical Professional Palette */
+  --color-primary: #B91C1C;
+  --color-primary-hover: #991B1B;
+  --color-accent: #DC2626;
+  
+  --color-bg: #F8FAFC;
+  --color-surface: #FFFFFF;
+  
+  --color-text-main: #0F172A;
+  --color-text-secondary: #475569;
+  
+  --color-border: #E2E8F0;
+  
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+  --color-critical: #EF4444;
+  --color-info: #3B82F6;
 
-  /* Semantic UI Mapping */
-  --bg-primary: #061828;
-  --bg-surface: #0C3A60;
-  --bg-card: rgba(12, 58, 96, 0.72);
-  --bg-card-hover: rgba(34, 102, 124, 0.45);
-  --border-subtle: rgba(161, 201, 121, 0.2);
-  --border-highlight: rgba(222, 236, 158, 0.4);
-  --border-cyan: rgba(34, 102, 124, 0.5);
+  /* Semantic UI Mapping - Preserved variable names for component compatibility */
+  --bg-primary: var(--color-bg);
+  --bg-surface: var(--color-surface);
+  --bg-card: var(--color-surface);
+  --bg-card-hover: #F1F5F9;
+  --border-subtle: var(--color-border);
+  --border-highlight: var(--color-primary);
 
-  --crimson-500: #DEEC9E;
-  --crimson-600: #A1C979;
-  --crimson-glow: rgba(161, 201, 121, 0.3);
+  --crimson-500: var(--color-critical);
+  --crimson-600: var(--color-primary);
+  --crimson-glow: rgba(239, 68, 68, 0.2);
 
-  --cyan-400: #DEEC9E;
-  --cyan-500: #22667C;
-  --cyan-glow: rgba(34, 102, 124, 0.4);
+  --cyan-400: var(--color-info);
+  --cyan-500: #2563EB;
 
-  --emerald-400: #DEEC9E;
-  --emerald-500: #A1C979;
-  --amber-400: #DEEC9E;
-  --amber-500: #A1C979;
-  --purple-400: #A1C979;
+  --emerald-400: var(--color-success);
+  --emerald-500: #15803D;
+  /* Used by DonorDashboard for the "available" label; was referenced but never defined. */
+  --emerald-600: #047857;
 
-  --text-main: #f3f6ee;
-  --text-muted: #cbd5be;
-  --text-dim: #7f999f;
+  --amber-400: var(--color-warning);
+  --amber-500: #B45309;
+
+  --purple-400: #8B5CF6;
+
+  --text-main: var(--color-text-main);
+  --text-muted: var(--color-text-secondary);
+  --text-dim: #94A3B8;
 
   --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -50,12 +64,7 @@ body {
   font-family: var(--font-sans);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
-  background-image: 
-    radial-gradient(circle at 15% 15%, rgba(34, 102, 124, 0.25) 0%, transparent 45%),
-    radial-gradient(circle at 85% 85%, rgba(161, 201, 121, 0.12) 0%, transparent 45%),
-    linear-gradient(180deg, #061828 0%, #0C3A60 100%);
-  background-attachment: fixed;
-  overflow-x: hidden;
+  background-image: none; /* Removed dark mode gradients */
 }
 
 /* Scrollbar */
@@ -67,22 +76,22 @@ body {
   background: var(--bg-primary);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(161, 201, 121, 0.3);
+  background: #CBD5E1;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--palette-sage-green);
+  background: #94A3B8;
 }
 
 /* Utility Animations */
 @keyframes pulseGlow {
   0%, 100% {
     box-shadow: 0 0 15px var(--crimson-glow);
-    border-color: rgba(239, 68, 68, 0.6);
+    border-color: rgba(239, 68, 68, 0.4);
   }
   50% {
-    box-shadow: 0 0 30px rgba(239, 68, 68, 0.45);
-    border-color: rgba(239, 68, 68, 0.9);
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.3);
+    border-color: rgba(239, 68, 68, 0.7);
   }
 }
 
@@ -117,29 +126,29 @@ body {
   padding: 1.5rem 1rem 3rem 1rem;
 }
 
-/* Glassmorphic Cards */
+/* Glassmorphic Cards -> Clean Cards */
 .glass-panel {
   background: var(--bg-card);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-subtle);
   border-radius: 14px;
   padding: 1.25rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .glass-panel:hover {
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: #CBD5E1;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
 .glass-panel.highlight-red {
-  border-color: var(--border-highlight);
-  box-shadow: 0 8px 30px rgba(220, 38, 38, 0.12);
+  border-color: var(--color-primary);
+  box-shadow: 0 8px 30px rgba(185, 28, 28, 0.12);
 }
 
 .glass-panel.highlight-cyan {
-  border-color: var(--border-cyan);
-  box-shadow: 0 8px 30px rgba(6, 182, 212, 0.12);
+  border-color: var(--color-info);
+  box-shadow: 0 8px 30px rgba(59, 130, 246, 0.12);
 }
 
 /* Buttons */
@@ -160,51 +169,49 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--palette-ocean-teal), var(--palette-midnight-navy));
-  color: var(--palette-light-lime);
-  border: 1px solid rgba(161, 201, 121, 0.4);
-  box-shadow: 0 4px 14px rgba(12, 58, 96, 0.5);
+  background: var(--color-primary);
+  color: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(185, 28, 28, 0.2);
 }
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #2c7a94, var(--palette-ocean-teal));
-  box-shadow: 0 6px 20px rgba(34, 102, 124, 0.5);
+  background: var(--color-primary-hover);
+  box-shadow: 0 6px 20px rgba(185, 28, 28, 0.3);
   transform: translateY(-1px);
 }
 
 .btn-cyan {
-  background: linear-gradient(135deg, var(--palette-sage-green), var(--palette-ocean-teal));
-  color: #071929;
-  font-weight: 800;
-  border: 1px solid var(--palette-light-lime);
-  box-shadow: 0 4px 14px rgba(161, 201, 121, 0.35);
+  background: var(--color-info);
+  color: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.2);
 }
 .btn-cyan:hover:not(:disabled) {
+  background: #2563EB;
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(222, 236, 158, 0.45);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.3);
 }
 
 .btn-secondary {
-  background: rgba(12, 58, 96, 0.4);
-  color: var(--text-main);
-  border-color: var(--border-subtle);
+  background: #F1F5F9;
+  color: var(--color-text-main);
+  border-color: var(--color-border);
 }
 .btn-secondary:hover:not(:disabled) {
-  background: rgba(34, 102, 124, 0.35);
-  border-color: rgba(161, 201, 121, 0.4);
+  background: #E2E8F0;
+  border-color: #CBD5E1;
 }
 
 .btn-danger-outline {
-  background: rgba(12, 58, 96, 0.5);
-  color: var(--palette-light-lime);
-  border-color: rgba(161, 201, 121, 0.4);
+  background: transparent;
+  color: var(--color-critical);
+  border-color: var(--color-critical);
+  border: 1px solid var(--color-critical);
 }
 .btn-danger-outline:hover:not(:disabled) {
-  background: rgba(34, 102, 124, 0.5);
-  border-color: var(--palette-light-lime);
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
   transform: none !important;
 }
@@ -213,7 +220,7 @@ body {
 .input-field, .select-field {
   width: 100%;
   padding: 0.65rem 0.9rem;
-  background: rgba(6, 24, 40, 0.85);
+  background: #FFFFFF;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   color: var(--text-main);
@@ -224,8 +231,8 @@ body {
 }
 
 .input-field:focus, .select-field:focus {
-  border-color: var(--palette-sage-green);
-  box-shadow: 0 0 0 3px rgba(161, 201, 121, 0.25);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.15);
 }
 
 /* Badges */
@@ -242,33 +249,33 @@ body {
 }
 
 .badge-red {
-  background: rgba(34, 102, 124, 0.35);
-  color: var(--palette-light-lime);
-  border: 1px solid rgba(161, 201, 121, 0.4);
+  background: #FEE2E2;
+  color: var(--color-critical);
+  border: 1px solid #FECACA;
 }
 
 .badge-cyan {
-  background: rgba(34, 102, 124, 0.4);
-  color: var(--palette-light-lime);
-  border: 1px solid rgba(34, 102, 124, 0.7);
+  background: #DBEAFE;
+  color: var(--color-info);
+  border: 1px solid #BFDBFE;
 }
 
 .badge-green {
-  background: rgba(161, 201, 121, 0.18);
-  color: var(--palette-light-lime);
-  border: 1px solid rgba(161, 201, 121, 0.45);
+  background: #DCFCE7;
+  color: var(--color-success);
+  border: 1px solid #BBF7D0;
 }
 
 .badge-amber {
-  background: rgba(222, 236, 158, 0.15);
-  color: var(--palette-light-lime);
-  border: 1px solid rgba(222, 236, 158, 0.4);
+  background: #FEF3C7;
+  color: var(--color-warning);
+  border: 1px solid #FDE68A;
 }
 
 .badge-purple {
-  background: rgba(34, 102, 124, 0.35);
-  color: var(--palette-sage-green);
-  border: 1px solid rgba(161, 201, 121, 0.3);
+  background: #F3E8FF;
+  color: #7E22CE;
+  border: 1px solid #E9D5FF;
 }
 
 /* Pulse Dot */
@@ -276,12 +283,12 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--palette-light-lime);
-  box-shadow: 0 0 8px var(--palette-light-lime);
+  background: var(--color-success);
+  box-shadow: 0 0 8px var(--color-success);
   animation: radarSweep 2s infinite ease-in-out;
 }
 
 .pulse-dot.pulse-red {
-  background: var(--crimson-500);
-  box-shadow: 0 0 8px var(--crimson-500);
+  background: var(--color-critical);
+  box-shadow: 0 0 8px var(--color-critical);
 }

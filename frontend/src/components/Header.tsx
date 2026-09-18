@@ -1,11 +1,12 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
-import { Activity, ShieldAlert, Building2, Droplet, UserCheck, Radio } from 'lucide-react';
+import { Activity, ShieldAlert, Building2, Droplet, UserCheck, Radio, LogOut } from 'lucide-react';
 import { UserRole } from '../types';
+import { DEV_ROLE_SWITCHER } from '../config';
 
 export const Header: React.FC = () => {
-  const { user, activeRole, switchRole, isLoading } = useAuth();
+  const { user, activeRole, switchRole, isLoading, logout } = useAuth();
   const { isConnected } = useWebSocket();
 
   const roleConfigs: { label: string; role: UserRole; email?: string; icon: React.ReactNode }[] = [
@@ -18,7 +19,7 @@ export const Header: React.FC = () => {
 
   return (
     <header style={{
-      background: 'rgba(17, 23, 38, 0.9)',
+      background: 'rgba(255, 255, 255, 0.9)',
       backdropFilter: 'blur(16px)',
       borderBottom: '1px solid var(--border-subtle)',
       position: 'sticky',
@@ -66,48 +67,85 @@ export const Header: React.FC = () => {
           </div>
         </div>
 
-        {/* Role Switcher */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(10, 13, 20, 0.7)', padding: '0.35rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', padding: '0 0.5rem', fontWeight: 600 }}>
-            SWITCH VIEW:
-          </span>
-          {roleConfigs.map((cfg) => {
-            const isSelected =
-              activeRole === cfg.role &&
-              (!cfg.email || (user && user.email === cfg.email));
+        {/* Demo-only role switcher. Excluded from production builds. */}
+        {DEV_ROLE_SWITCHER && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--color-bg)', padding: '0.35rem', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', padding: '0 0.5rem', fontWeight: 600 }}>
+              SWITCH VIEW:
+            </span>
+            {roleConfigs.map((cfg) => {
+              const isSelected =
+                activeRole === cfg.role &&
+                (!cfg.email || (user && user.email === cfg.email));
 
-            return (
+              return (
+                <button
+                  key={cfg.label}
+                  id={`role-btn-${cfg.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
+                  disabled={isLoading}
+                  onClick={() => switchRole(cfg.role, cfg.email)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.4rem 0.75rem',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    borderRadius: '6px',
+                    border: isSelected ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid transparent',
+                    background: isSelected ? 'rgba(239, 68, 68, 0.2)' : 'transparent',
+                    color: isSelected ? 'var(--color-primary)' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {cfg.icon}
+                  {cfg.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Signed-in identity + synthetic notice */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--amber-400)', background: 'rgba(245, 158, 11, 0.1)', padding: '0.35rem 0.65rem', borderRadius: '6px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+            <ShieldAlert size={14} />
+            <span>Demo Practice Mode</span>
+          </div>
+
+          {user && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div style={{ textAlign: 'right', lineHeight: 1.2 }}>
+                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                  {user.full_name}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+                  {activeRole}
+                </div>
+              </div>
               <button
-                key={cfg.label}
-                id={`role-btn-${cfg.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
-                disabled={isLoading}
-                onClick={() => switchRole(cfg.role, cfg.email)}
+                onClick={logout}
+                title="Sign out"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.4rem 0.75rem',
-                  fontSize: '0.8rem',
+                  gap: '0.35rem',
+                  padding: '0.4rem 0.7rem',
+                  fontSize: '0.75rem',
                   fontWeight: 600,
                   borderRadius: '6px',
-                  border: isSelected ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid transparent',
-                  background: isSelected ? 'rgba(239, 68, 68, 0.2)' : 'transparent',
-                  color: isSelected ? '#fca5a5' : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease'
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer'
                 }}
               >
-                {cfg.icon}
-                {cfg.label}
+                <LogOut size={14} />
+                Sign out
               </button>
-            );
-          })}
-        </div>
-
-        {/* Synthetic Notice */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--amber-400)', background: 'rgba(245, 158, 11, 0.1)', padding: '0.35rem 0.65rem', borderRadius: '6px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-          <ShieldAlert size={14} />
-          <span>Demo Practice Mode</span>
+            </div>
+          )}
         </div>
       </div>
     </header>

@@ -16,6 +16,13 @@ from app.models.audit import AllocationAuditLog
 
 
 async def seed_data():
+    """
+    Reset the database to the Section 14 synthetic scenario.
+
+    Everything runs in a single transaction: a failure part-way through leaves the
+    previous data intact rather than a half-wiped database. Intermediate ``flush``
+    calls assign primary keys without ending the transaction.
+    """
     print("Seeding SmartBlood database with Section 14 synthetic scenario...")
     async with AsyncSessionLocal() as db:
         # 1. Clean existing records in reverse dependency order
@@ -27,7 +34,6 @@ async def seed_data():
         await db.execute(delete(BloodBank))
         await db.execute(delete(Hospital))
         await db.execute(delete(User))
-        await db.commit()
 
         # 2. Create Users
         hashed_pwd = get_password_hash("password123")
@@ -88,15 +94,23 @@ async def seed_data():
             role=UserRole.COORDINATOR,
             is_verified=True
         )
+        # The ADMIN role existed but no account could ever hold it, leaving admin-only
+        # routes unreachable even in the demo environment.
+        user_admin = User(
+            email="admin@smartblood.org",
+            hashed_password=hashed_pwd,
+            full_name="System Administrator",
+            phone_number="+1-555-0000",
+            role=UserRole.ADMIN,
+            is_verified=True
+        )
 
         db.add_all([
             user_hosp_a, user_hosp_b, user_bb,
             user_donor_1, user_donor_2, user_donor_3,
-            user_coordinator
+            user_coordinator, user_admin
         ])
-        await db.commit()
-        for u in [user_hosp_a, user_hosp_b, user_bb, user_donor_1, user_donor_2, user_donor_3, user_coordinator]:
-            await db.refresh(u)
+        await db.flush()
 
         # 3. Create Hospitals (Point geometry SRID 4326: WGS84 - lng, lat)
         hosp_a = Hospital(
@@ -122,7 +136,7 @@ async def seed_data():
             location=ST_SetSRID(ST_Point(77.6000, 12.9780), 4326)
         )
         db.add_all([hosp_a, hosp_b])
-        await db.commit()
+        await db.flush()
 
         # 4. Create Blood Bank (~0.9 km from Hospital A)
         bb = BloodBank(
@@ -136,8 +150,7 @@ async def seed_data():
             location=ST_SetSRID(ST_Point(77.5990, 12.9750), 4326)
         )
         db.add(bb)
-        await db.commit()
-        await db.refresh(bb)
+        await db.flush()
 
         # 5. Create Inventory Units
         # Exactly matching Section 14: BB-001 and BB-002 are O- PRBC units
@@ -183,7 +196,7 @@ async def seed_data():
             status=UnitStatus.AVAILABLE
         )
         db.add_all([unit_1, unit_2, unit_3, unit_4])
-        await db.commit()
+        await db.flush()
 
         # 6. Create Donors (Matching Section 14: D1 at 2.1km, D2 at 3.8km)
         d1 = Donor(
@@ -230,6 +243,7 @@ async def seed_data():
 
         print("Synthetic database seeded successfully!")
         print("Pre-configured accounts:")
+        print("  System Admin:      admin@smartblood.org       / password123")
         print("  Hospital Admin:    hospital@smartblood.org    / password123")
         print("  Hospital Admin 2:  stjude@smartblood.org      / password123")
         print("  Blood Bank Staff:  bloodbank@smartblood.org   / password123")

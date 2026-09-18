@@ -49,10 +49,38 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/smartblood_db
       REDIS_URL: redis://redis:6379/0
       DEBUG: "True"
+      ENVIRONMENT: development
+      # Comma-separated. Must list the origins the *browser* uses, so both the Vite dev
+      # server (5173) and the served frontend container (8080) are included.
+      BACKEND_CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080"
+      # SECRET_KEY is intentionally left at its development default: the app refuses to
+      # start with it once ENVIRONMENT is anything other than development/dev/test.
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
+    # The image ships no schema state, so migrations are applied on every start.
+    # `alembic upgrade head` is idempotent. Seeding is a separate, deliberate step:
+    #   docker compose exec backend python -m app.seed
+    command: >
+      sh -c "python -m app.init_db &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # React Frontend, built as a static bundle and served by nginx
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Resolved by the browser on the host, not by the container — hence localhost
+        # rather than the compose service name `backend`.
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: smartblood_frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
 
 volumes:
   postgres_data:

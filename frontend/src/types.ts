@@ -67,16 +67,26 @@ export interface Allocation {
 export interface BloodRequest {
   id: string;
   hospital_id: string;
+  hospital_name?: string;
+  hospital_address?: string;
   patient_id_token: string;
   required_blood_group: string;
   component_type: BloodComponentType;
   units_requested: number;
+  units_covered: number;
+  units_shortfall: number;
   triage_level: TriageLevel;
   calculated_urgency_score: number;
   deadline_at: string;
   status: RequestStatus;
   created_at: string;
   allocations?: Allocation[];
+  /**
+   * Seconds left for a donor to respond, relative to when the alert feed was fetched.
+   * Only the donor-facing alert feed (`GET /donors/requests/active`) populates this;
+   * it is absent everywhere else, so callers must fall back to their own window.
+   */
+  alert_expires_in_seconds?: number;
 }
 
 export interface InventoryUnit {
@@ -106,6 +116,46 @@ export interface Donor {
   latitude?: number;
   longitude?: number;
   created_at: string;
+}
+
+/**
+ * Reduced donor shape returned by cross-tenant listings (GET /donors).
+ * The server omits date of birth, weight, coordinates and user_id from these.
+ */
+export interface DonorPublic {
+  id: string;
+  blood_group: string;
+  is_available: boolean;
+  reliability_score: number;
+  total_successful_donations: number;
+  last_donation_date?: string;
+}
+
+export interface HospitalDirectoryEntry {
+  id: string;
+  name: string;
+  address: string;
+  is_accredited: boolean;
+  latitude: number;
+  longitude: number;
+}
+
+/** Response body for a donor accepting or declining an alert. */
+export interface DonorRespondResult {
+  status: string;
+  allocation_id?: string;
+  donor_id?: string;
+  slot?: number;
+  distance_km?: number;
+  estimated_transit_minutes?: number;
+  units_covered?: number;
+  units_requested?: number;
+  shortfall?: number;
+  /**
+   * Status of the request itself after this response, as opposed to `status`, which
+   * describes the outcome of the response ("ALREADY_CLAIMED", "DECLINED", ...).
+   */
+  request_status?: RequestStatus;
 }
 
 export interface AllocationAuditLog {

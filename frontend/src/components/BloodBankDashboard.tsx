@@ -1,8 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../context/AuthContext';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from '../context/WebSocketContext';
-import { InventoryUnit, UnitStatus, BloodComponentType } from '../types';
-import { Droplet, Plus, RefreshCw, AlertTriangle, Building2, Truck, CheckCircle2, Clock } from 'lucide-react';
+import { api } from '../lib/api';
+import {
+  InventoryUnit,
+  UnitStatus,
+  BloodComponentType,
+  BloodRequest,
+  DonorPublic,
+} from '../types';
+import { Droplet, Plus, RefreshCw, AlertTriangle, Building2, Truck, CheckCircle2, Clock, Activity } from 'lucide-react';
 
 interface HospitalOrder {
   request_id: string;
@@ -26,12 +32,16 @@ interface HospitalOrder {
   }[];
 }
 
+/** Volume logged for a newly registered bag; the form no longer keeps dead state for it. */
+const DEFAULT_UNIT_VOLUME_ML = 300;
+
 export const BloodBankDashboard: React.FC = () => {
-  const { token } = useAuth();
   const { lastEvent } = useWebSocket();
 
   const [units, setUnits] = useState<InventoryUnit[]>([]);
   const [orders, setOrders] = useState<HospitalOrder[]>([]);
+  const [activeRequests, setActiveRequests] = useState<BloodRequest[]>([]);
+  const [activeDonors, setActiveDonors] = useState<DonorPublic[]>([]);
   const [loading, setLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
@@ -40,39 +50,31 @@ export const BloodBankDashboard: React.FC = () => {
   const [newBatch, setNewBatch] = useState('');
   const [newBloodGroup, setNewBloodGroup] = useState('O-');
   const [newComponent, setNewComponent] = useState<BloodComponentType>('PRBC');
-  const [newVolume] = useState(300);
   const [newExpiryDays, setNewExpiryDays] = useState(42);
 
-  const fetchInventoryAndOrders = async () => {
+  const fetchInventoryAndOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const [invRes, ordersRes] = await Promise.all([
-        fetch('http://localhost:8000/api/v1/inventory', {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch('http://localhost:8000/api/v1/inventory/orders', {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
+      const [invData, ordersData, reqData, donorsData] = await Promise.all([
+        api.get<InventoryUnit[]>('/inventory'),
+        api.get<HospitalOrder[]>('/inventory/orders'),
+        api.get<BloodRequest[]>('/requests'),
+        api.get<DonorPublic[]>('/donors'),
       ]);
-
-      if (invRes.ok) {
-        const data = await invRes.json();
-        setUnits(data);
-      }
-      if (ordersRes.ok) {
-        const ordersData = await ordersRes.json();
-        setOrders(ordersData);
-      }
+      setUnits(invData);
+      setOrders(ordersData);
+      setActiveRequests(reqData);
+      setActiveDonors(donorsData.filter((d) => d.is_available));
     } catch (err) {
       console.error('Failed to fetch inventory or orders:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchInventoryAndOrders();
-  }, [token]);
+  }, [fetchInventoryAndOrders]);
 
   useEffect(() => {
     if (
@@ -89,36 +91,24 @@ export const BloodBankDashboard: React.FC = () => {
     ) {
       fetchInventoryAndOrders();
     }
-  }, [lastEvent]);
+  }, [lastEvent, fetchInventoryAndOrders]);
 
   const handleStatusChange = async (unitId: string, newStatus: UnitStatus) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/inventory/units/${unitId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (!res.ok) throw new Error('Failed to update status');
+      await api.patch(`/inventory/units/${unitId}/status`, { status: newStatus });
       await fetchInventoryAndOrders();
     } catch (err) {
-      alert('Error changing unit status: ' + err);
+      alert('Error changing unit status: ' + (err instanceof Error ? err.message : err));
     }
   };
 
   const handleDispatchOrder = async (requestId: string) => {
     setDispatchingId(requestId);
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/inventory/orders/${requestId}/dispatch`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error('Failed to dispatch order');
+      await api.post(`/inventory/orders/${requestId}/dispatch`);
       await fetchInventoryAndOrders();
     } catch (err) {
-      alert('Error dispatching blood: ' + err);
+      alert('Error dispatching blood: ' + (err instanceof Error ? err.message : err));
     } finally {
       setDispatchingId(null);
     }
@@ -130,33 +120,45 @@ export const BloodBankDashboard: React.FC = () => {
     const expiry = new Date(Date.now() + newExpiryDays * 24 * 3600 * 1000);
 
     try {
-      const res = await fetch('http://localhost:8000/api/v1/inventory/units', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          batch_number: newBatch || `BB-${Math.floor(1000 + Math.random() * 9000)}`,
-          blood_group: newBloodGroup,
-          component_type: newComponent,
-          volume_ml: newVolume,
-          collection_date: now.toISOString(),
-          expiry_date: expiry.toISOString(),
-        }),
+      await api.post('/inventory/units', {
+        batch_number: newBatch || `BB-${Math.floor(1000 + Math.random() * 9000)}`,
+        blood_group: newBloodGroup,
+        component_type: newComponent,
+        volume_ml: DEFAULT_UNIT_VOLUME_ML,
+        collection_date: now.toISOString(),
+        expiry_date: expiry.toISOString(),
       });
-      if (!res.ok) throw new Error('Unit creation failed');
       setShowAddModal(false);
       setNewBatch('');
       await fetchInventoryAndOrders();
     } catch (err) {
-      alert('Error registering blood unit: ' + err);
+      alert('Error registering blood unit: ' + (err instanceof Error ? err.message : err));
     }
   };
 
   const availableCount = units.filter((u) => u.status === 'AVAILABLE').length;
   const lockedCount = units.filter((u) => u.status === 'LOCKED_RESERVE').length;
-  const quarantinedCount = units.filter((u) => u.status === 'QUARANTINED').length;
+  const quarantinedCount = units.filter(
+    (u) => u.status === 'QUARANTINED' || u.status === 'EXPIRED'
+  ).length;
+
+  const volunteerAllocations = activeRequests.flatMap(req =>
+    (req.allocations || []).filter((a) => a.source_type === 'LIVE_DONOR').map((a) => ({
+      request: req,
+      allocation: a
+    }))
+  );
+
+  // Map active donors, and attach allocation info if they have one.
+  // AllocationOut exposes `donor_id`, not a nested `donor` object — comparing against
+  // `allocation.donor?.id` always produced undefined, so every donor read "On Standby".
+  const displayedDonors = activeDonors.map(donor => {
+    const alloc = volunteerAllocations.find(va => va.allocation.donor_id === donor.id);
+    return {
+      donor,
+      activeDispatch: alloc
+    };
+  });
 
   return (
     <div>
@@ -170,7 +172,7 @@ export const BloodBankDashboard: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         gap: '0.85rem',
-        color: '#a5f3fc',
+        color: 'var(--color-info)',
         fontSize: '0.85rem',
       }}>
         <Building2 size={24} style={{ flexShrink: 0, color: 'var(--cyan-400)' }} />
@@ -233,7 +235,7 @@ export const BloodBankDashboard: React.FC = () => {
         </div>
 
         {orders.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)', background: 'rgba(10, 13, 20, 0.5)', borderRadius: '8px' }}>
+          <div style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)', background: 'var(--color-bg)', borderRadius: '8px' }}>
             <Clock size={32} color="var(--text-dim)" style={{ marginBottom: '0.5rem' }} />
             <p>No active hospital orders currently assigned to this blood bank.</p>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
@@ -244,14 +246,18 @@ export const BloodBankDashboard: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {orders.map((order) => {
               const hasReservedUnits = order.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE');
-              const allDispatched = order.allocated_units.every((u) => u.unit_status === 'DISPATCHED');
+              // `[].every()` is true, so an order with no allocated units would claim
+              // to be fully dispatched. Require at least one unit.
+              const allDispatched =
+                order.allocated_units.length > 0 &&
+                order.allocated_units.every((u) => u.unit_status === 'DISPATCHED');
 
               return (
                 <div
                   key={order.request_id}
                   id={`order-card-${order.request_id.slice(0, 8)}`}
                   style={{
-                    background: 'rgba(10, 13, 20, 0.85)',
+                    background: 'var(--color-bg)',
                     padding: '1.2rem',
                     borderRadius: '10px',
                     border: '1px solid var(--border-subtle)',
@@ -263,7 +269,7 @@ export const BloodBankDashboard: React.FC = () => {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.3rem' }}>
-                        <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'white' }}>
+                      <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)' }}>
                           {order.hospital_name}
                         </span>
                         <span className={`badge ${allDispatched ? 'badge-green' : 'badge-amber'}`}>
@@ -284,7 +290,7 @@ export const BloodBankDashboard: React.FC = () => {
                   </div>
 
                   {/* Matched Units in this blood bank */}
-                  <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ background: 'var(--color-surface)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.4rem', textTransform: 'uppercase' }}>
                       Blood Bags Allocated From Our Storage:
                     </div>
@@ -293,7 +299,7 @@ export const BloodBankDashboard: React.FC = () => {
                         <div
                           key={u.unit_id}
                           style={{
-                            background: 'rgba(10, 13, 20, 0.8)',
+                            background: 'var(--color-bg)',
                             padding: '0.4rem 0.75rem',
                             borderRadius: '6px',
                             border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -342,6 +348,110 @@ export const BloodBankDashboard: React.FC = () => {
         )}
       </div>
 
+      {/* SECTION: Global Emergency Demand (All Active Requests) */}
+      <div className="glass-panel" style={{ marginBottom: '1.75rem', border: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <h2 style={{ fontSize: '1.2rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <Activity size={22} color="var(--color-primary)" />
+            City-Wide Hospital Requests
+          </h2>
+          <span className="badge badge-cyan">{activeRequests.length} Network Requests</span>
+        </div>
+
+        {activeRequests.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+            No active emergency requests across the network.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            {activeRequests.map((req) => (
+              <div
+                key={req.id}
+                style={{
+                  background: 'var(--color-bg)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.2rem' }}>
+                    {req.hospital_name || 'Hospital'} — {req.units_requested}x {req.required_blood_group} ({req.component_type === 'PRBC' ? 'Red Blood Cells' : req.component_type})
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Urgency: <b>{req.calculated_urgency_score?.toFixed(0) ?? 0}/100</b> | Triage: <b>{req.triage_level?.replace(/_/g, ' ')}</b> | Covered: <b>{req.units_covered ?? 0} of {req.units_requested}</b>
+                  </div>
+                </div>
+                <div>
+                  <span className={`badge ${
+                    req.status === 'FULFILLED' ? 'badge-green' :
+                    req.status === 'COMMITTED_IN_TRANSIT' ? 'badge-cyan' :
+                    req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'badge-amber' :
+                    'badge-red'
+                  }`}>
+                    {req.status === 'FULFILLED' ? 'Delivered' :
+                     req.status === 'COMMITTED_IN_TRANSIT' ? 'En Route' :
+                     req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'Asking Donors' :
+                     req.status === 'PENDING_EVALUATION' ? 'Searching...' :
+                     req.status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* SECTION: Active Volunteer Donors */}
+      <div className="glass-panel" style={{ marginBottom: '1.75rem', border: '1px solid var(--color-success)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+          <h2 style={{ fontSize: '1.2rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <Droplet size={22} color="var(--color-success)" />
+            Active Volunteer Donors
+          </h2>
+          <span className="badge badge-green">{displayedDonors.length} Active Volunteers</span>
+        </div>
+
+        {displayedDonors.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+            No volunteers are currently active and available.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            {displayedDonors.map(({ donor, activeDispatch }) => (
+              <div key={donor.id} style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.2rem' }}>
+                    {donor.blood_group} Volunteer (Reliability: {Math.round(donor.reliability_score * 100)}%)
+                  </div>
+                  {activeDispatch ? (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Matched for Request {activeDispatch.request.id.slice(0, 8)} | Status: <b style={{ color: 'var(--color-success)' }}>{activeDispatch.allocation.status.replace('_', ' ')}</b>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Currently On Standby
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  {activeDispatch ? (
+                    <div className="badge badge-green">Dispatched</div>
+                  ) : (
+                    <div className="badge" style={{ background: 'var(--color-surface)', color: 'var(--text-muted)' }}>Available</div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Inventory Stock Table */}
       <div className="glass-panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
@@ -370,7 +480,6 @@ export const BloodBankDashboard: React.FC = () => {
             </thead>
             <tbody>
               {units.map((unit) => {
-                const isBB001 = unit.batch_number === 'BB-001';
                 const isLocked = unit.status === 'LOCKED_RESERVE';
 
                 return (
@@ -378,19 +487,14 @@ export const BloodBankDashboard: React.FC = () => {
                     key={unit.id}
                     id={`unit-row-${unit.batch_number.toLowerCase()}`}
                     style={{
-                      borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
-                      background: isBB001 && isLocked ? 'rgba(239, 68, 68, 0.08)' : 'transparent',
+                      borderBottom: '1px solid var(--color-border)',
+                      background: isLocked ? 'rgba(217, 119, 6, 0.06)' : 'transparent',
                     }}
                   >
                     <td style={{ padding: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                      {unit.batch_number}
-                      {isBB001 && (
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.7rem', color: 'var(--amber-400)', fontWeight: 700 }}>
-                          [DEMO TARGET]
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ padding: '0.75rem', fontWeight: 700, color: 'white' }}>{unit.blood_group}</td>
+                    {unit.batch_number}
+                  </td>
+                    <td style={{ padding: '0.75rem', fontWeight: 700, color: 'var(--text-main)' }}>{unit.blood_group}</td>
                     <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.component_type === 'PRBC' ? 'Red Blood Cells' : unit.component_type}</td>
                     <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.volume_ml} mL</td>
                     <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>
@@ -412,11 +516,13 @@ export const BloodBankDashboard: React.FC = () => {
                           ? 'Reserved'
                           : unit.status === 'DISPATCHED'
                           ? 'Dispatched'
+                          : unit.status === 'EXPIRED'
+                          ? 'Expired'
                           : 'Damaged'}
                       </span>
                     </td>
                     <td style={{ padding: '0.75rem', textAlign: 'right' }}>
-                      {unit.status !== 'QUARANTINED' && (
+                      {unit.status !== 'QUARANTINED' && unit.status !== 'EXPIRED' && (
                         <button
                           id={`btn-quarantine-${unit.batch_number.toLowerCase()}`}
                           onClick={() => handleStatusChange(unit.id, 'QUARANTINED')}
@@ -454,7 +560,7 @@ export const BloodBankDashboard: React.FC = () => {
           left: 0,
           right: 0,
           bottom: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
+          background: 'rgba(0, 0, 0, 0.5)',
           backdropFilter: 'blur(8px)',
           display: 'flex',
           alignItems: 'center',
@@ -499,6 +605,7 @@ export const BloodBankDashboard: React.FC = () => {
                     <option value="WHOLE_BLOOD">Whole Blood</option>
                     <option value="PLATELETS">Platelets</option>
                     <option value="FFP">FFP</option>
+                    <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
                   </select>
                 </div>
               </div>

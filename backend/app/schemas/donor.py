@@ -50,3 +50,23 @@ class DonorOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+class DonorPublicOut(BaseModel):
+    """
+    Cross-tenant view of a donor.
+
+    ``DonorOut`` carries date of birth, body weight, exact home coordinates and the
+    owning ``user_id``. None of that is needed to plan a donation, so any listing
+    that crosses tenants returns this reduced shape instead. ``reliability_score``
+    stays because the blood bank and coordinator dashboards rank candidates by it.
+    """
+
+    id: str
+    blood_group: str
+    is_available: bool
+    reliability_score: float
+    total_successful_donations: int
+    last_donation_date: Optional[date] = None
+
+    model_config = ConfigDict(from_attributes=True)
+

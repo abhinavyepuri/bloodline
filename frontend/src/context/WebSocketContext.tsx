@@ -1,5 +1,7 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { WebSocketEvent } from '../types';
+import { WS_URL } from '../config';
+import { useAuth } from './AuthContext';
 
 interface WebSocketContextType {
   isConnected: boolean;
@@ -11,96 +13,167 @@ interface WebSocketContextType {
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
 
+/** Close code the server sends when the token is missing, invalid or expired. */
+const WS_POLICY_VIOLATION = 1008;
+const RECONNECT_DELAY_MS = 3000;
+const HEARTBEAT_INTERVAL_MS = 25000;
+
+/** Event types that should surface as a toast, and how they should look. */
+function toastFor(event: WebSocketEvent): WebSocketContextType['toastMessage'] {
+  switch (event.type) {
+    case 'RE_PLANNING_TRIGGERED':
+      return {
+        title: '⚠️ REPLACEMENT NEEDED',
+        text:
+          event.message ||
+          'A blood unit became unavailable. The system is searching for a replacement.',
+        type: 'urgent',
+      };
+    case 'EMERGENCY_DISPATCH_ALERT':
+      return {
+        title: '🩸 EMERGENCY: DONORS NEEDED',
+        text: event.message || 'A nearby hospital urgently needs blood.',
+        type: 'urgent',
+      };
+    case 'INVENTORY_LOCKED':
+    case 'DONOR_CLAIM_SUCCESS':
+      return {
+        title: '✅ BLOOD RESERVED & EN ROUTE',
+        text: event.message || 'Blood unit secured and on the way to the hospital.',
+        type: 'success',
+      };
+    case 'AUTH_ERROR':
+      return { title: '🔒 SESSION REJECTED', text: event.message || 'Please sign in again.', type: 'info' };
+    default:
+      return null;
+  }
+}
+
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { token } = useAuth();
+
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [events, setEvents] = useState<WebSocketEvent[]>([]);
   const [lastEvent, setLastEvent] = useState<WebSocketEvent | null>(null);
-  const [toastMessage, setToastMessage] = useState<{
-    title: string;
-    text: string;
-    type: 'info' | 'urgent' | 'success';
-  } | null>(null);
+  const [toastMessage, setToastMessage] = useState<WebSocketContextType['toastMessage']>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<any>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Guards the reconnect loop. Without it, unmounting called close(), which fired
+   * onclose, which scheduled another connect() — so the socket reconnected forever
+   * and React 19's StrictMode double-mount doubled the loop.
+   */
+  const shouldReconnectRef = useRef<boolean>(false);
 
-  const dismissToast = () => setToastMessage(null);
+  const dismissToast = useCallback(() => setToastMessage(null), []);
 
-  const connect = () => {
-    try {
-      const socket = new WebSocket('ws://localhost:8000/api/v1/realtime/ws');
-      wsRef.current = socket;
+  useEffect(() => {
+    if (!token) {
+      // Signed out: nothing to connect with.
+      setIsConnected(false);
+      return;
+    }
+
+    shouldReconnectRef.current = true;
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
+
+    const connect = () => {
+      if (!shouldReconnectRef.current) return;
+
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(`${WS_URL}?token=${encodeURIComponent(token)}`);
+      } catch (err) {
+        console.error('Failed to open SmartBlood WebSocket:', err);
+        reconnectTimerRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
+        return;
+      }
+
+      socketRef.current = socket;
 
       socket.onopen = () => {
         setIsConnected(true);
-        console.log('⚡ Connected to SmartBlood real-time WebSocket');
       };
 
       socket.onmessage = (messageEvent) => {
+        let data: WebSocketEvent;
         try {
-          const data = JSON.parse(messageEvent.data);
-          if (data.type === 'pong') return;
+          data = JSON.parse(messageEvent.data) as WebSocketEvent;
+        } catch {
+          return; // Ignore anything that is not JSON (e.g. a bare pong).
+        }
 
-          setLastEvent(data);
-          setEvents((prev) => [data, ...prev.slice(0, 49)]);
-
-          // Trigger toast for high-priority events
-          if (data.type === 'EMERGENCY_DISPATCH_ALERT') {
-            setToastMessage({
-              title: '🚨 EMERGENCY ALERT',
-              text: data.message || `Hospital urgently needs ${data.required_blood_group} blood!`,
-              type: 'urgent',
-            });
-          } else if (data.type === 'RE_PLANNING_TRIGGERED') {
-            setToastMessage({
-              title: '⚠️ REPLACEMENT NEEDED',
-              text: data.message || 'A blood unit was spoiled. System is searching for an immediate replacement.',
-              type: 'urgent',
-            });
-          } else if (data.type === 'INVENTORY_LOCKED' || data.type === 'DONOR_CLAIM_SUCCESS') {
-            setToastMessage({
-              title: '✅ BLOOD RESERVED & EN ROUTE',
-              text: data.message || 'Blood unit secured and on the way to the hospital.',
-              type: 'success',
-            });
+        if (data.type === 'pong' || data.type === 'AUTH_ERROR') {
+          if (data.type === 'AUTH_ERROR') {
+            console.warn('SmartBlood WebSocket rejected the session:', data.message);
+            setToastMessage(toastFor(data));
           }
-        } catch (err) {
-          console.warn('Non-JSON WebSocket message received:', messageEvent.data);
+          return;
+        }
+
+        setLastEvent(data);
+        setEvents((prev) => [data, ...prev.slice(0, 49)]);
+
+        const toast = toastFor(data);
+        if (toast) setToastMessage(toast);
+      };
+
+      socket.onclose = (closeEvent) => {
+        setIsConnected(false);
+        socketRef.current = null;
+
+        if (closeEvent.code === WS_POLICY_VIOLATION) {
+          // The server refused our token. Reconnecting would loop against a decision
+          // that will not change until the user signs in again.
+          shouldReconnectRef.current = false;
+          setToastMessage({
+            title: '🔒 SESSION REJECTED',
+            text: 'Your session is no longer valid. Please sign in again.',
+            type: 'info',
+          });
+          return;
+        }
+
+        if (shouldReconnectRef.current) {
+          reconnectTimerRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
         }
       };
 
-      socket.onclose = () => {
-        setIsConnected(false);
-        console.warn('SmartBlood WebSocket closed. Reconnecting in 3s...');
-        reconnectTimeoutRef.current = setTimeout(connect, 3000);
-      };
-
-      socket.onerror = (err) => {
-        console.error('WebSocket error:', err);
+      socket.onerror = () => {
+        // onclose always follows; let it own the reconnect decision.
         socket.close();
       };
-    } catch (err) {
-      console.error('Failed to instantiate WebSocket:', err);
-      reconnectTimeoutRef.current = setTimeout(connect, 3000);
-    }
-  };
+    };
 
-  useEffect(() => {
     connect();
 
-    // Heartbeat ping interval
-    const pingInterval = setInterval(() => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send('ping');
+    pingInterval = setInterval(() => {
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send('ping');
       }
-    }, 25000);
+    }, HEARTBEAT_INTERVAL_MS);
 
     return () => {
-      clearInterval(pingInterval);
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      if (wsRef.current) wsRef.current.close();
+      // Stop the loop before closing, so this close does not schedule a reconnect.
+      shouldReconnectRef.current = false;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      if (pingInterval) clearInterval(pingInterval);
+
+      const socket = socketRef.current;
+      socketRef.current = null;
+      if (socket) {
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.onmessage = null;
+        socket.close();
+      }
+      setIsConnected(false);
     };
-  }, []);
+  }, [token]);
 
   return (
     <WebSocketContext.Provider

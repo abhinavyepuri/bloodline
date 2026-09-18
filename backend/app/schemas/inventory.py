@@ -1,7 +1,14 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.models.inventory import BloodComponentType, UnitStatus
+
+
+def _as_utc(value: Any) -> Any:
+    """Shelf-life comparisons are done against an aware ``now``; naive input means UTC."""
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 class InventoryUnitCreate(BaseModel):
@@ -9,8 +16,15 @@ class InventoryUnitCreate(BaseModel):
     blood_group: str = Field(..., min_length=1, max_length=5, description="Blood group e.g. O+, A-")
     component_type: BloodComponentType = Field(..., description="WHOLE_BLOOD, PRBC, PLATELETS, FFP, CRYOPRECIPITATE")
     volume_ml: float = Field(default=450.0, gt=0.0, description="Unit volume in mL")
-    collection_date: datetime = Field(..., description="Date/time of blood collection")
-    expiry_date: datetime = Field(..., description="Expiration timestamp under cold storage")
+    collection_date: datetime = Field(..., description="Date/time of blood collection (UTC; naive input is assumed UTC)")
+    expiry_date: datetime = Field(..., description="Expiration timestamp under cold storage (UTC; naive input is assumed UTC)")
+    blood_bank_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Owning blood bank. Required for coordinator/admin callers; ignored for "
+            "blood bank accounts, whose own bank always owns the stock they register."
+        ),
+    )
 
     model_config = ConfigDict(
         extra="forbid",
@@ -37,6 +51,11 @@ class InventoryUnitCreate(BaseModel):
         if isinstance(v, str):
             return v.strip().upper()
         return v
+
+    @field_validator("collection_date", "expiry_date", mode="before")
+    @classmethod
+    def normalize_timestamps(cls, v: Any) -> Any:
+        return _as_utc(v)
 
 
 class InventoryUnitUpdateStatus(BaseModel):

@@ -40,9 +40,30 @@ class DonorRespondRequest(BaseModel):
 
 
 class DonorRespondOut(BaseModel):
+    """
+    Result of a donor accepting or declining an alert.
+
+    ``process_donor_response`` already computes the distance, ETA and coverage
+    figures; they were previously dropped on the floor because this schema did not
+    declare them.
+    """
+
     status: str
     allocation_id: Optional[str] = None
     donor_id: Optional[str] = None
+    slot: Optional[int] = Field(None, description="Zero-based unit slot this donor claimed")
+    distance_km: Optional[float] = None
+    estimated_transit_minutes: Optional[float] = None
+    units_covered: Optional[int] = Field(None, description="Units secured for the request so far")
+    units_requested: Optional[int] = None
+    shortfall: Optional[int] = Field(None, description="Units still outstanding")
+    request_status: Optional[str] = Field(
+        None,
+        description=(
+            "Status of the request itself after this response, as opposed to ``status``, "
+            "which describes the outcome of the response."
+        ),
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
