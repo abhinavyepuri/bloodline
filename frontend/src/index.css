@@ -1,31 +1,38 @@
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
 :root {
-  --bg-primary: #0a0d14;
-  --bg-surface: #111726;
-  --bg-card: rgba(22, 30, 49, 0.7);
-  --bg-card-hover: rgba(30, 41, 67, 0.85);
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-highlight: rgba(239, 68, 68, 0.35);
-  --border-cyan: rgba(6, 182, 212, 0.35);
+  /* User-Provided 4-Color Palette */
+  --palette-light-lime: #DEEC9E;
+  --palette-sage-green: #A1C979;
+  --palette-ocean-teal: #22667C;
+  --palette-midnight-navy: #0C3A60;
 
-  --crimson-500: #ef4444;
-  --crimson-600: #dc2626;
-  --crimson-glow: rgba(239, 68, 68, 0.25);
+  /* Semantic UI Mapping */
+  --bg-primary: #061828;
+  --bg-surface: #0C3A60;
+  --bg-card: rgba(12, 58, 96, 0.72);
+  --bg-card-hover: rgba(34, 102, 124, 0.45);
+  --border-subtle: rgba(161, 201, 121, 0.2);
+  --border-highlight: rgba(222, 236, 158, 0.4);
+  --border-cyan: rgba(34, 102, 124, 0.5);
 
-  --cyan-400: #22d3ee;
-  --cyan-500: #06b6d4;
-  --cyan-glow: rgba(6, 182, 212, 0.25);
+  --crimson-500: #DEEC9E;
+  --crimson-600: #A1C979;
+  --crimson-glow: rgba(161, 201, 121, 0.3);
 
-  --emerald-400: #34d399;
-  --emerald-500: #10b981;
-  --amber-400: #fbbf24;
-  --amber-500: #f59e0b;
-  --purple-400: #c084fc;
+  --cyan-400: #DEEC9E;
+  --cyan-500: #22667C;
+  --cyan-glow: rgba(34, 102, 124, 0.4);
 
-  --text-main: #f3f4f6;
-  --text-muted: #9ca3af;
-  --text-dim: #6b7280;
+  --emerald-400: #DEEC9E;
+  --emerald-500: #A1C979;
+  --amber-400: #DEEC9E;
+  --amber-500: #A1C979;
+  --purple-400: #A1C979;
+
+  --text-main: #f3f6ee;
+  --text-muted: #cbd5be;
+  --text-dim: #7f999f;
 
   --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -44,8 +51,9 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   background-image: 
-    radial-gradient(circle at 15% 15%, rgba(239, 68, 68, 0.07) 0%, transparent 40%),
-    radial-gradient(circle at 85% 85%, rgba(6, 182, 212, 0.05) 0%, transparent 40%);
+    radial-gradient(circle at 15% 15%, rgba(34, 102, 124, 0.25) 0%, transparent 45%),
+    radial-gradient(circle at 85% 85%, rgba(161, 201, 121, 0.12) 0%, transparent 45%),
+    linear-gradient(180deg, #061828 0%, #0C3A60 100%);
   background-attachment: fixed;
   overflow-x: hidden;
 }
@@ -59,11 +67,11 @@ body {
   background: var(--bg-primary);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(161, 201, 121, 0.3);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(239, 68, 68, 0.4);
+  background: var(--palette-sage-green);
 }
 
 /* Utility Animations */
@@ -152,44 +160,47 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--crimson-500), var(--crimson-600));
-  color: white;
-  box-shadow: 0 4px 14px var(--crimson-glow);
+  background: linear-gradient(135deg, var(--palette-ocean-teal), var(--palette-midnight-navy));
+  color: var(--palette-light-lime);
+  border: 1px solid rgba(161, 201, 121, 0.4);
+  box-shadow: 0 4px 14px rgba(12, 58, 96, 0.5);
 }
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #f87171, var(--crimson-500));
-  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
+  background: linear-gradient(135deg, #2c7a94, var(--palette-ocean-teal));
+  box-shadow: 0 6px 20px rgba(34, 102, 124, 0.5);
   transform: translateY(-1px);
 }
 
 .btn-cyan {
-  background: linear-gradient(135deg, var(--cyan-500), #0284c7);
-  color: white;
-  box-shadow: 0 4px 14px var(--cyan-glow);
+  background: linear-gradient(135deg, var(--palette-sage-green), var(--palette-ocean-teal));
+  color: #071929;
+  font-weight: 800;
+  border: 1px solid var(--palette-light-lime);
+  box-shadow: 0 4px 14px rgba(161, 201, 121, 0.35);
 }
 .btn-cyan:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(6, 182, 212, 0.4);
+  box-shadow: 0 6px 20px rgba(222, 236, 158, 0.45);
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(12, 58, 96, 0.4);
   color: var(--text-main);
   border-color: var(--border-subtle);
 }
 .btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(34, 102, 124, 0.35);
+  border-color: rgba(161, 201, 121, 0.4);
 }
 
 .btn-danger-outline {
-  background: rgba(239, 68, 68, 0.1);
-  color: #fca5a5;
-  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(12, 58, 96, 0.5);
+  color: var(--palette-light-lime);
+  border-color: rgba(161, 201, 121, 0.4);
 }
 .btn-danger-outline:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.25);
-  border-color: var(--crimson-500);
+  background: rgba(34, 102, 124, 0.5);
+  border-color: var(--palette-light-lime);
 }
 
 .btn:disabled {
@@ -202,7 +213,7 @@ body {
 .input-field, .select-field {
   width: 100%;
   padding: 0.65rem 0.9rem;
-  background: rgba(10, 13, 20, 0.8);
+  background: rgba(6, 24, 40, 0.85);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   color: var(--text-main);
@@ -213,8 +224,8 @@ body {
 }
 
 .input-field:focus, .select-field:focus {
-  border-color: var(--cyan-500);
-  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.2);
+  border-color: var(--palette-sage-green);
+  box-shadow: 0 0 0 3px rgba(161, 201, 121, 0.25);
 }
 
 /* Badges */
@@ -231,33 +242,33 @@ body {
 }
 
 .badge-red {
-  background: rgba(239, 68, 68, 0.15);
-  color: #fca5a5;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(34, 102, 124, 0.35);
+  color: var(--palette-light-lime);
+  border: 1px solid rgba(161, 201, 121, 0.4);
 }
 
 .badge-cyan {
-  background: rgba(6, 182, 212, 0.15);
-  color: #a5f3fc;
-  border: 1px solid rgba(6, 182, 212, 0.3);
+  background: rgba(34, 102, 124, 0.4);
+  color: var(--palette-light-lime);
+  border: 1px solid rgba(34, 102, 124, 0.7);
 }
 
 .badge-green {
-  background: rgba(16, 185, 129, 0.15);
-  color: #6ee7b7;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(161, 201, 121, 0.18);
+  color: var(--palette-light-lime);
+  border: 1px solid rgba(161, 201, 121, 0.45);
 }
 
 .badge-amber {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fde68a;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: rgba(222, 236, 158, 0.15);
+  color: var(--palette-light-lime);
+  border: 1px solid rgba(222, 236, 158, 0.4);
 }
 
 .badge-purple {
-  background: rgba(192, 132, 252, 0.15);
-  color: #e9d5ff;
-  border: 1px solid rgba(192, 132, 252, 0.3);
+  background: rgba(34, 102, 124, 0.35);
+  color: var(--palette-sage-green);
+  border: 1px solid rgba(161, 201, 121, 0.3);
 }
 
 /* Pulse Dot */
@@ -265,8 +276,8 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--emerald-400);
-  box-shadow: 0 0 8px var(--emerald-400);
+  background: var(--palette-light-lime);
+  box-shadow: 0 0 8px var(--palette-light-lime);
   animation: radarSweep 2s infinite ease-in-out;
 }
 
