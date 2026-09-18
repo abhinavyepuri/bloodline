@@ -130,13 +130,13 @@ export const HospitalDashboard: React.FC = () => {
       <div className="glass-panel highlight-red" style={{ height: 'fit-content' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1.25rem' }}>
           <AlertCircle size={22} color="var(--crimson-500)" />
-          <h2 style={{ fontSize: '1.15rem', fontWeight: 700 }}>Emergency Blood Intake</h2>
+          <h2 style={{ fontSize: '1.15rem', fontWeight: 700 }}>Order Emergency Blood</h2>
         </div>
 
         <form onSubmit={handleCreateRequest} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-              Required Blood Group
+              Blood Group Needed
             </label>
             <select
               id="intake-blood-group"
@@ -153,7 +153,7 @@ export const HospitalDashboard: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
             <div>
               <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                Component Type
+                Blood Product
               </label>
               <select
                 id="intake-component"
@@ -161,15 +161,15 @@ export const HospitalDashboard: React.FC = () => {
                 value={componentType}
                 onChange={(e) => setComponentType(e.target.value as BloodComponentType)}
               >
-                <option value="PRBC">Packed RBCs (PRBC)</option>
+                <option value="PRBC">Red Blood Cells</option>
                 <option value="WHOLE_BLOOD">Whole Blood</option>
                 <option value="PLATELETS">Platelets</option>
-                <option value="FFP">Fresh Frozen Plasma</option>
+                <option value="FFP">Plasma</option>
               </select>
             </div>
             <div>
               <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-                Units Requested
+                Number of Bags
               </label>
               <input
                 id="intake-units"
@@ -185,7 +185,7 @@ export const HospitalDashboard: React.FC = () => {
 
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-              Clinical Triage Severity
+              How Urgent Is This?
             </label>
             <select
               id="intake-triage"
@@ -193,16 +193,16 @@ export const HospitalDashboard: React.FC = () => {
               value={triageLevel}
               onChange={(e) => setTriageLevel(e.target.value as TriageLevel)}
             >
-              <option value="MASSIVE_TRANSFUSION_PROTOCOL">🔴 Level 1: Massive Transfusion (MTP &lt;15m)</option>
-              <option value="ACTIVE_TRAUMA">🟠 Level 2: Active Trauma (&lt;1 hour)</option>
-              <option value="SCHEDULED_EMERGENCY_RESERVE">🟡 Level 3: Scheduled Urgent Surgery (&lt;4h)</option>
-              <option value="ROUTINE_CLINICAL">🟢 Level 4: Routine Replenishment (&lt;24h)</option>
+              <option value="MASSIVE_TRANSFUSION_PROTOCOL">🔴 Life-Threatening Emergency (Needed in &lt;15 mins)</option>
+              <option value="ACTIVE_TRAUMA">🟠 Severe Injury / Accident (Needed in &lt;1 hour)</option>
+              <option value="SCHEDULED_EMERGENCY_RESERVE">🟡 Urgent Surgery (Needed in &lt;4 hours)</option>
+              <option value="ROUTINE_CLINICAL">🟢 Standard Delivery (Needed in &lt;24 hours)</option>
             </select>
           </div>
 
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-              Clinical Deadline (Minutes from now)
+              Needed Within (Minutes)
             </label>
             <input
               id="intake-deadline"
@@ -223,7 +223,7 @@ export const HospitalDashboard: React.FC = () => {
             style={{ marginTop: '0.5rem', width: '100%' }}
           >
             <Send size={16} />
-            {submitting ? 'Optimizing & Broadcasting...' : 'Submit Emergency Request'}
+            {submitting ? 'Sending Request...' : 'Send Emergency Request to Blood Bank'}
           </button>
         </form>
       </div>
@@ -272,7 +272,7 @@ export const HospitalDashboard: React.FC = () => {
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
                         <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'white' }}>
-                          {req.units_requested}x {req.required_blood_group} ({req.component_type})
+                          {req.units_requested}x {req.required_blood_group} ({req.component_type === 'PRBC' ? 'Red Blood Cells' : req.component_type})
                         </span>
                         <span className={`badge ${
                           req.status === 'COMMITTED_IN_TRANSIT'
@@ -285,17 +285,25 @@ export const HospitalDashboard: React.FC = () => {
                             ? 'badge-purple'
                             : 'badge-cyan'
                         }`}>
-                          {req.status.replace(/_/g, ' ')}
+                          {req.status === 'COMMITTED_IN_TRANSIT'
+                            ? 'On The Way'
+                            : req.status === 'RE_PLANNING'
+                            ? 'Finding Replacement'
+                            : req.status === 'PROXIMITY_ZONE_NOTIFIED'
+                            ? 'Asking Donors'
+                            : req.status === 'FULFILLED'
+                            ? 'Delivered'
+                            : req.status}
                         </span>
                       </div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        Patient Token: <code>{req.patient_id_token}</code> | Triage: <b>{req.triage_level}</b>
+                        Patient: <code>{req.patient_id_token}</code>
                       </div>
                     </div>
 
                     {/* Urgency Meter */}
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>URGENCY SCORE</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>URGENCY LEVEL</div>
                       <div style={{ fontSize: '1.4rem', fontWeight: 800, color: isUrgent ? 'var(--crimson-500)' : 'var(--cyan-400)' }}>
                         {req.calculated_urgency_score.toFixed(0)} <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>/ 100</span>
                       </div>
@@ -306,7 +314,7 @@ export const HospitalDashboard: React.FC = () => {
                   {req.allocations && req.allocations.length > 0 && (
                     <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.5rem', textTransform: 'uppercase' }}>
-                        Allocated Fulfillment Sourcing:
+                        Where This Blood Is Coming From:
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
                         {req.allocations.map((alloc) => (
@@ -325,10 +333,10 @@ export const HospitalDashboard: React.FC = () => {
                           >
                             <Truck size={14} color="var(--emerald-400)" />
                             <span>
-                              <b>{alloc.source_type === 'BLOOD_BANK_INVENTORY' ? 'Cold-Chain Inventory Unit' : 'Live Voluntary Donor'}</b>
-                              {alloc.distance_km && ` (~${alloc.distance_km}km, ETA ~${alloc.estimated_transit_minutes}m)`}
+                              <b>{alloc.source_type === 'BLOOD_BANK_INVENTORY' ? '📦 From Blood Bank Storage' : '🙋 From Volunteer Donor'}</b>
+                              {alloc.distance_km && ` (~${alloc.distance_km}km away, ETA ~${alloc.estimated_transit_minutes} min)`}
                             </span>
-                            <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>{alloc.status}</span>
+                            <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>Confirmed</span>
                           </div>
                         ))}
                       </div>
@@ -344,7 +352,7 @@ export const HospitalDashboard: React.FC = () => {
                       style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
                     >
                       <Info size={14} />
-                      Why This Recommendation?
+                      Why this choice?
                     </button>
                     {req.status === 'COMMITTED_IN_TRANSIT' && (
                       <button

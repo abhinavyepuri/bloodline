@@ -182,23 +182,23 @@ export const BloodBankDashboard: React.FC = () => {
       {/* Top Stat Row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="glass-panel">
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>AVAILABLE ON-SHELF</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>READY ON SHELVES</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--emerald-400)', marginTop: '0.25rem' }}>
-            {availableCount} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Units</span>
+            {availableCount} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Bags</span>
           </div>
         </div>
 
         <div className="glass-panel">
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>LOCKED IN RESERVE (FEFO)</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>RESERVED FOR HOSPITALS</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--amber-400)', marginTop: '0.25rem' }}>
-            {lockedCount} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Units</span>
+            {lockedCount} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Bags</span>
           </div>
         </div>
 
         <div className="glass-panel">
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>QUARANTINED / EXPIRED</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>DAMAGED / EXPIRED</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--crimson-500)', marginTop: '0.25rem' }}>
-            {quarantinedCount} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Units</span>
+            {quarantinedCount} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Bags</span>
           </div>
         </div>
 
@@ -210,7 +210,7 @@ export const BloodBankDashboard: React.FC = () => {
             style={{ width: '100%', height: '100%' }}
           >
             <Plus size={16} />
-            Log New Verified Unit
+            + Add New Blood Bag
           </button>
         </div>
       </div>
@@ -221,7 +221,7 @@ export const BloodBankDashboard: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Building2 size={22} color="var(--cyan-400)" />
             <h2 style={{ fontSize: '1.2rem', fontWeight: 800 }}>
-              Incoming Hospital Blood Requests & Dispatch Queue
+              Incoming Hospital Blood Orders
             </h2>
             <span className="badge badge-cyan">{orders.length} Active Orders</span>
           </div>
@@ -237,7 +237,7 @@ export const BloodBankDashboard: React.FC = () => {
             <Clock size={32} color="var(--text-dim)" style={{ marginBottom: '0.5rem' }} />
             <p>No active hospital orders currently assigned to this blood bank.</p>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
-              Switch to <b>Hospital Admin</b> and submit an emergency request to see it route here in real time!
+              Switch to <b>Hospital Desk</b> and send an emergency blood request to see it arrive here in real time!
             </p>
           </div>
         ) : (
@@ -286,7 +286,7 @@ export const BloodBankDashboard: React.FC = () => {
                   {/* Matched Units in this blood bank */}
                   <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.4rem', textTransform: 'uppercase' }}>
-                      Matched Cold-Chain Inventory Units (FEFO Reserved):
+                      Blood Bags Allocated From Our Storage:
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                       {order.allocated_units.map((u) => (
@@ -304,10 +304,10 @@ export const BloodBankDashboard: React.FC = () => {
                           }}
                         >
                           <Droplet size={13} color="var(--crimson-500)" />
-                          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>Batch {u.batch_number}</span>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>Bag {u.batch_number}</span>
                           <span>({u.blood_group})</span>
                           <span className={`badge ${u.unit_status === 'LOCKED_RESERVE' ? 'badge-amber' : u.unit_status === 'DISPATCHED' ? 'badge-green' : 'badge-red'}`} style={{ fontSize: '0.65rem' }}>
-                            {u.unit_status}
+                            {u.unit_status === 'LOCKED_RESERVE' ? 'Reserved' : u.unit_status === 'DISPATCHED' ? 'Dispatched' : 'Damaged'}
                           </span>
                         </div>
                       ))}
@@ -325,13 +325,13 @@ export const BloodBankDashboard: React.FC = () => {
                         style={{ fontSize: '0.85rem', padding: '0.45rem 1rem' }}
                       >
                         <Truck size={15} />
-                        {dispatchingId === order.request_id ? 'Dispatching...' : 'Pack & Hand Over to Ambulance / Dispatch'}
+                        {dispatchingId === order.request_id ? 'Handing Over...' : 'Hand to Ambulance (Dispatch)'}
                       </button>
                     )}
                     {allDispatched && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--emerald-400)', fontSize: '0.85rem', fontWeight: 600 }}>
                         <CheckCircle2 size={16} />
-                        All units packed and dispatched to hospital courier.
+                        All blood bags handed to courier and on the way to hospital.
                       </div>
                     )}
                   </div>
@@ -347,7 +347,7 @@ export const BloodBankDashboard: React.FC = () => {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
           <h2 style={{ fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Droplet size={20} color="var(--crimson-500)" />
-            All Cold-Chain Inventory Stocks
+            All Blood Bags in Cold Storage
           </h2>
           <button onClick={fetchInventoryAndOrders} className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>
             <RefreshCw size={14} className={loading ? 'spin' : ''} />
@@ -359,13 +359,13 @@ export const BloodBankDashboard: React.FC = () => {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
-                <th style={{ padding: '0.75rem' }}>BATCH NUMBER</th>
+                <th style={{ padding: '0.75rem' }}>BAG CODE</th>
                 <th style={{ padding: '0.75rem' }}>BLOOD GROUP</th>
-                <th style={{ padding: '0.75rem' }}>COMPONENT</th>
+                <th style={{ padding: '0.75rem' }}>TYPE</th>
                 <th style={{ padding: '0.75rem' }}>VOLUME</th>
                 <th style={{ padding: '0.75rem' }}>EXPIRY DATE</th>
-                <th style={{ padding: '0.75rem' }}>CURRENT STATUS</th>
-                <th style={{ padding: '0.75rem', textAlign: 'right' }}>SIMULATE FAILURE / ACTIONS</th>
+                <th style={{ padding: '0.75rem' }}>STATUS</th>
+                <th style={{ padding: '0.75rem', textAlign: 'right' }}>TEST BAG DAMAGE / ACTIONS</th>
               </tr>
             </thead>
             <tbody>
@@ -391,7 +391,7 @@ export const BloodBankDashboard: React.FC = () => {
                       )}
                     </td>
                     <td style={{ padding: '0.75rem', fontWeight: 700, color: 'white' }}>{unit.blood_group}</td>
-                    <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.component_type}</td>
+                    <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.component_type === 'PRBC' ? 'Red Blood Cells' : unit.component_type}</td>
                     <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.volume_ml} mL</td>
                     <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>
                       {new Date(unit.expiry_date).toLocaleDateString()}
@@ -406,7 +406,13 @@ export const BloodBankDashboard: React.FC = () => {
                           ? 'badge-cyan'
                           : 'badge-red'
                       }`}>
-                        {unit.status.replace(/_/g, ' ')}
+                        {unit.status === 'AVAILABLE'
+                          ? 'Ready'
+                          : unit.status === 'LOCKED_RESERVE'
+                          ? 'Reserved'
+                          : unit.status === 'DISPATCHED'
+                          ? 'Dispatched'
+                          : 'Damaged'}
                       </span>
                     </td>
                     <td style={{ padding: '0.75rem', textAlign: 'right' }}>
@@ -416,10 +422,10 @@ export const BloodBankDashboard: React.FC = () => {
                           onClick={() => handleStatusChange(unit.id, 'QUARANTINED')}
                           className="btn btn-danger-outline"
                           style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
-                          title="Simulate contamination/quarantine to trigger automatic re-planning"
+                          title="Simulate bag damage to see system find replacement"
                         >
                           <AlertTriangle size={13} />
-                          Quarantine Unit
+                          Mark Damaged
                         </button>
                       )}
                       {unit.status === 'QUARANTINED' && (
@@ -428,7 +434,7 @@ export const BloodBankDashboard: React.FC = () => {
                           className="btn btn-secondary"
                           style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
                         >
-                          Restore to Available
+                          Restore to Ready
                         </button>
                       )}
                     </td>

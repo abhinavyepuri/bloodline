@@ -9,11 +9,11 @@ export const Header: React.FC = () => {
   const { isConnected } = useWebSocket();
 
   const roleConfigs: { label: string; role: UserRole; email?: string; icon: React.ReactNode }[] = [
-    { label: 'Coordinator Ops', role: 'COORDINATOR', icon: <Radio size={16} /> },
-    { label: 'Hospital Admin', role: 'HOSPITAL', icon: <Building2 size={16} /> },
-    { label: 'Blood Bank Staff', role: 'BLOOD_BANK', icon: <Droplet size={16} /> },
-    { label: 'Donor Alice (D1)', role: 'DONOR', email: 'alice@donor.org', icon: <UserCheck size={16} /> },
-    { label: 'Donor Bob (D2)', role: 'DONOR', email: 'bob@donor.org', icon: <UserCheck size={16} /> },
+    { label: 'City Overview', role: 'COORDINATOR', icon: <Radio size={16} /> },
+    { label: 'Hospital Desk', role: 'HOSPITAL', icon: <Building2 size={16} /> },
+    { label: 'Blood Bank Storage', role: 'BLOOD_BANK', icon: <Droplet size={16} /> },
+    { label: 'Volunteer: Alice', role: 'DONOR', email: 'alice@donor.org', icon: <UserCheck size={16} /> },
+    { label: 'Volunteer: Bob', role: 'DONOR', email: 'bob@donor.org', icon: <UserCheck size={16} /> },
   ];
 
   return (
@@ -53,15 +53,15 @@ export const Header: React.FC = () => {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <h1 style={{ fontSize: '1.25rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
-                SmartBlood <span style={{ color: 'var(--crimson-500)', fontSize: '0.85rem', fontWeight: 600 }}>YARIN</span>
+                SmartBlood <span style={{ color: 'var(--crimson-500)', fontSize: '0.85rem', fontWeight: 600 }}>LIVE</span>
               </h1>
               <span className={`pulse-dot ${isConnected ? '' : 'pulse-red'}`} title={isConnected ? 'Real-time WebSocket active' : 'Connecting...'} />
               <span style={{ fontSize: '0.75rem', color: isConnected ? 'var(--emerald-400)' : 'var(--crimson-500)', fontWeight: 600 }}>
-                {isConnected ? 'LIVE REAL-TIME' : 'CONNECTING...'}
+                {isConnected ? 'ONLINE & READY' : 'CONNECTING...'}
               </span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Emergency Blood Allocation & Geospatial Donor Dispatch
+              Fast Blood Delivery & Volunteer Donor Emergency Network
             </p>
           </div>
         </div>
@@ -107,7 +107,7 @@ export const Header: React.FC = () => {
         {/* Synthetic Notice */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--amber-400)', background: 'rgba(245, 158, 11, 0.1)', padding: '0.35rem 0.65rem', borderRadius: '6px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
           <ShieldAlert size={14} />
-          <span>Synthetic Prototype Data</span>
+          <span>Demo Practice Mode</span>
         </div>
       </div>
     </header>

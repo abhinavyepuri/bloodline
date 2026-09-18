@@ -110,7 +110,7 @@ class AllocationService:
                 "batches": [u.batch_number for u in inventory_units],
                 "status": request.status.value,
                 "eta_minutes": 2.5,
-                "message": f"{len(allocated_allocations)} units locked from blood bank (FEFO reserve)."
+                "message": f"{len(allocated_allocations)} unit(s) reserved from blood bank storage."
             })
             await manager.broadcast({
                 "type": "REQUEST_UPDATED",
@@ -195,7 +195,7 @@ class AllocationService:
             "units_needed": shortfall,
             "ttl_seconds": 180,
             "donor_ids": donor_ids,
-            "message": f"EMERGENCY: {shortfall} unit(s) of {request.required_blood_group} requested. Respond within 180s."
+            "message": f"Emergency: {shortfall} bag(s) of {request.required_blood_group} blood needed urgently by the hospital. Please tap Accept if you can help!"
         })
         await manager.broadcast({
             "type": "REQUEST_UPDATED",
@@ -297,7 +297,7 @@ class AllocationService:
             "distance_km": distance_km,
             "eta_minutes": eta_minutes,
             "status": "COMMITTED_IN_TRANSIT",
-            "message": f"First-Ack Hard Lock claimed by Donor. Units committed in transit."
+            "message": f"Nearby volunteer donor agreed to donate! They are now traveling to the hospital."
         })
         await manager.broadcast({
             "type": "DONOR_STAND_DOWN",
@@ -468,7 +468,7 @@ class AllocationService:
                 "is_replan": True,
                 "reason": trigger_reason,
                 "donor_ids": donor_ids,
-                "message": f"RE-PLAN ALERT: Unit unavailable ({trigger_reason}). Replacement needed for {shortfall} unit(s)."
+                "message": f"Urgent replacement needed: A blood bag was unavailable ({trigger_reason}). Alerting {len(nearby_donors)} nearby volunteer donors."
             })
             await manager.broadcast({
                 "type": "REQUEST_UPDATED",

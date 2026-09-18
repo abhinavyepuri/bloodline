@@ -92,7 +92,7 @@ export const DonorDashboard: React.FC = () => {
       });
 
       if (res.status === 409) {
-        setResponseStatus('RACE_CONFLICT: Request was already hard-locked by another faster donor!');
+        setResponseStatus('Someone else already agreed to donate. Thank you for your willingness to help!');
         return;
       }
 
@@ -103,9 +103,9 @@ export const DonorDashboard: React.FC = () => {
 
       const result = await res.json();
       if (action === 'ACCEPT') {
-        setResponseStatus('SUCCESS: First-Ack Hard Lock Acquired! You are committed in transit to the hospital.');
+        setResponseStatus('Thank you! You are confirmed to help this patient. Please head toward the hospital.');
       } else {
-        setResponseStatus('Declined recorded. Proximity soft lock released.');
+        setResponseStatus('You declined. We will notify other nearby volunteers.');
       }
       await fetchDonorData();
     } catch (err: any) {
@@ -146,21 +146,21 @@ export const DonorDashboard: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Reliability Score</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Reliability Rating</span>
               <span style={{ fontWeight: 700, color: 'var(--emerald-400)' }}>
                 {(donorProfile.reliability_score * 100).toFixed(0)}%
               </span>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Verified Donations</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Completed Donations</span>
               <span style={{ fontWeight: 700, color: 'white' }}>{donorProfile.total_successful_donations}</span>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--cyan-400)' }}>
               <MapPin size={14} />
               <span>
-                Coordinates: {donorProfile.latitude?.toFixed(4)}, {donorProfile.longitude?.toFixed(4)}
+                Location: City Center Area
               </span>
             </div>
 
@@ -174,9 +174,9 @@ export const DonorDashboard: React.FC = () => {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Emergency Ready</div>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Ready to Donate</div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    {donorProfile.is_available ? 'Active in proximity radar' : 'Unavailable for alerts'}
+                    {donorProfile.is_available ? 'Available for emergency alerts' : 'Paused alerts'}
                   </div>
                 </div>
                 <button
@@ -185,7 +185,7 @@ export const DonorDashboard: React.FC = () => {
                   className={`btn ${donorProfile.is_available ? 'btn-cyan' : 'btn-secondary'}`}
                   style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
                 >
-                  {donorProfile.is_available ? 'ONLINE' : 'STANDBY'}
+                  {donorProfile.is_available ? 'AVAILABLE' : 'PAUSED'}
                 </button>
               </div>
             </div>
@@ -198,17 +198,17 @@ export const DonorDashboard: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <AlertCircle size={22} color="var(--crimson-500)" />
-            Active Emergency Proximity Broadcasts
+            Urgent Blood Requests Near You
           </h2>
-          <span className="badge badge-red" style={{ animation: 'radarSweep 2s infinite' }}>
-            {activeAlerts.length} Active Alerts
+          <span className="badge badge-red">
+            {activeAlerts.length} Urgent Request{activeAlerts.length !== 1 ? 's' : ''}
           </span>
         </div>
 
         {responseStatus && (
           <div style={{
-            background: responseStatus.includes('SUCCESS') ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
-            border: `1px solid ${responseStatus.includes('SUCCESS') ? 'var(--emerald-500)' : 'var(--crimson-500)'}`,
+            background: responseStatus.includes('Thank') ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+            border: `1px solid ${responseStatus.includes('Thank') ? 'var(--emerald-500)' : 'var(--crimson-500)'}`,
             padding: '0.75rem 1rem',
             borderRadius: '8px',
             marginBottom: '1rem',
@@ -228,9 +228,9 @@ export const DonorDashboard: React.FC = () => {
         {activeAlerts.length === 0 ? (
           <div className="glass-panel" style={{ textAlign: 'center', padding: '3.5rem', color: 'var(--text-muted)' }}>
             <UserCheck size={36} color="var(--text-dim)" style={{ marginBottom: '0.75rem' }} />
-            <p>No open emergency broadcasts targeting your blood group right now.</p>
+            <p>No open emergency blood requests matching your group right now.</p>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.5rem' }}>
-              When a hospital issues an emergency broadcast that cannot be met from blood bank inventory, an alert will flash here with a 180s response countdown.
+              When a hospital runs out of blood bags in storage, an urgent alert will buzz here so you can accept and help save a life.
             </p>
           </div>
         ) : (
@@ -251,29 +251,29 @@ export const DonorDashboard: React.FC = () => {
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
                       <span className="badge badge-red" style={{ fontSize: '0.8rem' }}>
-                        EMERGENCY BROADCAST
+                        URGENT DONOR NEEDED
                       </span>
                       <span style={{ fontSize: '1.3rem', fontWeight: 800, color: 'white' }}>
-                        {alert.units_requested}x {alert.required_blood_group} ({alert.component_type})
+                        {alert.units_requested}x {alert.required_blood_group} ({alert.component_type === 'PRBC' ? 'Red Blood Cells' : alert.component_type})
                       </span>
                     </div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                      Metro General Hospital | Triage: <b>{alert.triage_level}</b> | Urgency: <b>{alert.calculated_urgency_score}/100</b>
+                      Metro General Hospital | Urgency: <b>{alert.calculated_urgency_score.toFixed(0)}/100</b>
                     </div>
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(239, 68, 68, 0.2)', padding: '0.4rem 0.8rem', borderRadius: '8px' }}>
                     <Clock size={16} color="var(--crimson-500)" />
                     <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#fca5a5' }}>
-                      TTL: 180s
+                      Respond in 3 min
                     </span>
                   </div>
                 </div>
 
                 <div style={{ marginTop: '1rem', background: 'rgba(10, 13, 20, 0.6)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.85rem' }}>
                   <p style={{ color: '#e5e7eb', lineHeight: 1.4 }}>
-                    Your location is within the <b>5 km proximity geofence</b> (~2.1 km away, estimated transit ~4 min).
-                    The system is broadcasting to eligible compatible donors simultaneously. <b>First accepted response claims the hard-lock reservation.</b>
+                    You are nearby (~2.1 km away, about 4 minutes drive). A patient at the hospital urgently needs this blood type.
+                    <b> The first volunteer to tap Accept will be assigned to donate.</b>
                   </p>
                 </div>
 
@@ -286,7 +286,7 @@ export const DonorDashboard: React.FC = () => {
                     style={{ fontSize: '0.85rem', padding: '0.5rem 1rem' }}
                   >
                     <XCircle size={16} />
-                    Decline Dispatch
+                    I Can't Make It
                   </button>
                   <button
                     id={`btn-accept-${alert.id}`}
@@ -295,7 +295,7 @@ export const DonorDashboard: React.FC = () => {
                     style={{ fontSize: '0.85rem', padding: '0.5rem 1.25rem' }}
                   >
                     <CheckCircle size={16} />
-                    ACCEPT & COMMIT DISPATCH (FIRST-ACK)
+                    I Can Help! (Accept & Head to Hospital)
                   </button>
                 </div>
               </div>

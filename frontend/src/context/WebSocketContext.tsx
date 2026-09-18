@@ -47,20 +47,20 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           // Trigger toast for high-priority events
           if (data.type === 'EMERGENCY_DISPATCH_ALERT') {
             setToastMessage({
-              title: 'EMERGENCY DISPATCH ALERT',
-              text: data.message || `Blood requested: ${data.required_blood_group}`,
+              title: '🚨 EMERGENCY ALERT',
+              text: data.message || `Hospital urgently needs ${data.required_blood_group} blood!`,
               type: 'urgent',
             });
           } else if (data.type === 'RE_PLANNING_TRIGGERED') {
             setToastMessage({
-              title: 'RE-PLANNING TRIGGERED',
-              text: data.message || 'Resource state change triggered re-planning engine.',
+              title: '⚠️ REPLACEMENT NEEDED',
+              text: data.message || 'A blood unit was spoiled. System is searching for an immediate replacement.',
               type: 'urgent',
             });
           } else if (data.type === 'INVENTORY_LOCKED' || data.type === 'DONOR_CLAIM_SUCCESS') {
             setToastMessage({
-              title: 'ALLOCATION COMMITTED',
-              text: data.message || 'Units reserved and committed in transit.',
+              title: '✅ BLOOD RESERVED & EN ROUTE',
+              text: data.message || 'Blood unit secured and on the way to the hospital.',
               type: 'success',
             });
           }
