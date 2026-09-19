@@ -13,7 +13,10 @@ interface SeededAccount {
 const PRESET_ACCOUNTS: SeededAccount[] = [
   { label: 'Hospital – Metro General', email: 'hospital@smartblood.org', password: 'password123', role: 'HOSPITAL' },
   { label: 'Hospital – St. Jude', email: 'stjude@smartblood.org', password: 'password123', role: 'HOSPITAL' },
-  { label: 'Blood Bank Staff', email: 'bloodbank@smartblood.org', password: 'password123', role: 'BLOOD_BANK' },
+  { label: 'Blood Bank 1 – Metro Central', email: 'bloodbank@smartblood.org', password: 'password123', role: 'BLOOD_BANK' },
+  { label: 'Blood Bank 2 – City Red Cross', email: 'redcross@smartblood.org', password: 'password123', role: 'BLOOD_BANK' },
+  { label: 'Blood Bank 3 – St. Jude Regional', email: 'stjude.bb@smartblood.org', password: 'password123', role: 'BLOOD_BANK' },
+  { label: 'Blood Bank 4 – Apex Logistics', email: 'apex.bloodbank@smartblood.org', password: 'password123', role: 'BLOOD_BANK' },
   { label: 'System Admin', email: 'admin@smartblood.org', password: 'password123', role: 'ADMIN' },
   // Universal donors and emergency O types
   { label: 'Alice Chen', email: 'alice@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O-' },

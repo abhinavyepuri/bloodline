@@ -69,6 +69,7 @@ From the project root:
 ```bash
 docker compose up -d db redis
 ```
+```
 *Containers started:*
 - `smartblood_postgres` on port `5432` (PostgreSQL 16 with PostGIS 3.4)
 - `smartblood_redis` on port `6379` (Redis 7.2)

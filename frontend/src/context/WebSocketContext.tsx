@@ -30,17 +30,24 @@ function toastFor(event: WebSocketEvent): WebSocketContextType['toastMessage'] {
         type: 'urgent',
       };
     case 'EMERGENCY_DISPATCH_ALERT':
+    case 'EMERGENCY_BROADCAST_SENT':
       return {
-        title: '🩸 EMERGENCY: DONORS NEEDED',
-        text: event.message || 'A nearby hospital urgently needs blood.',
+        title: '🩸 EMERGENCY: DONORS NOTIFIED',
+        text: event.message || 'System has dispatched emergency alerts to eligible nearby volunteer donors.',
         type: 'urgent',
       };
     case 'INVENTORY_LOCKED':
     case 'DONOR_CLAIM_SUCCESS':
       return {
-        title: '✅ BLOOD RESERVED & EN ROUTE',
-        text: event.message || 'Blood unit secured and on the way to the hospital.',
+        title: '✅ BLOOD SECURED / DONOR COMMITTED',
+        text: event.message || 'Volunteer donor accepted emergency request and confirmed packets.',
         type: 'success',
+      };
+    case 'DONOR_AVAILABILITY_CHANGED':
+      return {
+        title: '📍 DONOR AVAILABILITY UPDATED',
+        text: (event as any).message || 'Volunteer donor availability status changed in real-time.',
+        type: 'info',
       };
     case 'BLOOD_BANK_DISPATCHED':
       return {

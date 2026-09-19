@@ -194,3 +194,11 @@ class InventoryUnitOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class HospitalOrderAcceptRequest(BaseModel):
+    auto_dispatch: Optional[bool] = Field(default=False, description="Whether to dispatch the accepted units immediately")
+    unit_ids: Optional[List[str]] = Field(default=None, description="Explicit inventory unit IDs to allocate")
+
+    model_config = ConfigDict(extra="ignore")
+
+
+

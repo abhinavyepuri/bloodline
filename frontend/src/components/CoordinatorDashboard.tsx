@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useWebSocket } from '../context/WebSocketContext';
 import { api } from '../lib/api';
 import {
@@ -9,6 +9,8 @@ import {
   TriageLevel,
   TransferRecommendation,
   PredictionSummary,
+  AdminOverview,
+  AdminMetrics,
 } from '../types';
 import {
   Radio,
@@ -87,6 +89,26 @@ export const CoordinatorDashboard: React.FC = () => {
   const PAGE_SIZE = 5;
   const [reqsPage, setReqsPage] = useState(1);
   const [transfersPage, setTransfersPage] = useState(1);
+
+  const tickerItems = useMemo(() => {
+    const live = events.map((evt, idx) => ({
+      id: `live-${idx}-${evt.type}`,
+      type: evt.type || 'CLUSTER_EVENT',
+      message: evt.message || (evt as any).data?.message || (typeof evt === 'string' ? evt : JSON.stringify(evt)),
+      timestamp: (evt as any).timestamp ? new Date((evt as any).timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(),
+      isLive: true,
+    }));
+
+    const audit = auditLogs.map((log) => ({
+      id: `audit-${log.id}`,
+      type: log.decision_type || 'SYSTEM_DECISION',
+      message: log.rationale_summary || `Allocation evaluated for request #${log.request_id.slice(0, 8)}`,
+      timestamp: log.created_at ? new Date(log.created_at).toLocaleTimeString() : 'Recent',
+      isLive: false,
+    }));
+
+    return [...live, ...audit].slice(0, 25);
+  }, [events, auditLogs]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -351,16 +373,16 @@ export const CoordinatorDashboard: React.FC = () => {
         ) : (
           (() => {
             const totalT = transfers.length;
-            const visibleT = transfers.slice(0, transfersPage * PAGE_SIZE);
-            const hasMoreT = totalT > visibleT.length;
-            const totalTPages = Math.ceil(totalT / PAGE_SIZE);
+            const startIdx = (transfersPage - 1) * PAGE_SIZE;
+            const visibleT = transfers.slice(startIdx, startIdx + PAGE_SIZE);
+            const totalTPages = Math.ceil(totalT / PAGE_SIZE) || 1;
             return (
               <div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
                   {visibleT.map((t, idx) => (
                     <div key={idx} style={{ background: 'var(--color-bg)', padding: '1rem 1.25rem', borderRadius: '10px', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span style={{ fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', minWidth: '24px' }}>#{(transfersPage - 1) * PAGE_SIZE + idx + 1}</span>
+                        <span style={{ fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', minWidth: '24px' }}>#{startIdx + idx + 1}</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap' }}>
                           <div style={{ minWidth: '160px' }}>
                             <div style={{ fontSize: '0.72rem', color: 'var(--amber-500)', fontWeight: 700, textTransform: 'uppercase' }}>SOURCE FACILITY (Wastage Risk: {Math.round(t.donor_wastage_risk * 100)}%)</div>
@@ -387,17 +409,15 @@ export const CoordinatorDashboard: React.FC = () => {
                     </div>
                   ))}
                 </div>
-                {(hasMoreT || totalT > PAGE_SIZE) && (
+                {totalT > PAGE_SIZE && (
                   <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleT.length} of {totalT} recommendations</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Showing {startIdx + 1}–{Math.min(transfersPage * PAGE_SIZE, totalT)} of {totalT} recommendations
+                    </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      {totalT > 10 ? (
-                        Array.from({ length: totalTPages }, (_, i) => i + 1).map((p) => (
-                          <button key={p} onClick={() => setTransfersPage(p)} className={`btn ${transfersPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
-                        ))
-                      ) : hasMoreT ? (
-                        <button onClick={() => setTransfersPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
-                      ) : null}
+                      {Array.from({ length: totalTPages }, (_, i) => i + 1).map((p) => (
+                        <button key={p} onClick={() => setTransfersPage(p)} className={`btn ${transfersPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -454,9 +474,9 @@ export const CoordinatorDashboard: React.FC = () => {
           ) : (
             (() => {
               const totalReqs = requests.length;
-              const visibleReqs = requests.slice(0, reqsPage * PAGE_SIZE);
-              const hasMoreReqs = totalReqs > visibleReqs.length;
-              const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE);
+              const startIdx = (reqsPage - 1) * PAGE_SIZE;
+              const visibleReqs = requests.slice(startIdx, startIdx + PAGE_SIZE);
+              const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE) || 1;
               return (
                 <div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -468,7 +488,7 @@ export const CoordinatorDashboard: React.FC = () => {
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                <span style={{ fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{(reqsPage - 1) * PAGE_SIZE + index + 1}</span>
+                                <span style={{ fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{startIdx + index + 1}</span>
                                 <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>{req.patient_id_token || req.id.slice(0, 8)}</span>
                                 <span style={{ padding: '0.2rem 0.55rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700, background: 'rgba(100, 116, 139, 0.12)', color: 'var(--text-main)' }}>{req.status}</span>
                               </div>
@@ -501,17 +521,15 @@ export const CoordinatorDashboard: React.FC = () => {
                       );
                     })}
                   </div>
-                  {(hasMoreReqs || totalReqs > PAGE_SIZE) && (
+                  {totalReqs > PAGE_SIZE && (
                     <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleReqs.length} of {totalReqs} requests</span>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        Showing {startIdx + 1}–{Math.min(reqsPage * PAGE_SIZE, totalReqs)} of {totalReqs} requests
+                      </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        {totalReqs > 10 ? (
-                          Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
-                            <button key={p} onClick={() => setReqsPage(p)} className={`btn ${reqsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
-                          ))
-                        ) : hasMoreReqs ? (
-                          <button onClick={() => setReqsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
-                        ) : null}
+                        {Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
+                          <button key={p} onClick={() => setReqsPage(p)} className={`btn ${reqsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -525,19 +543,25 @@ export const CoordinatorDashboard: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {/* Live WebSocket Event Ticker */}
           <div className="glass-panel">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-              <Activity size={18} color="var(--cyan-500)" />
-              <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Real-Time Coordination Ticker</h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Activity size={18} color="var(--cyan-500)" />
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Real-Time Coordination Ticker</h3>
+              </div>
+              <span className="badge badge-cyan" style={{ fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#06b6d4' }} />
+                Live Stream
+              </span>
             </div>
-            {events.length === 0 ? (
+            {tickerItems.length === 0 ? (
               <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center', padding: '1.5rem' }}>
                 Awaiting real-time cluster events...
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '360px', overflowY: 'auto' }}>
-                {events.slice(0, 15).map((evt, idx) => (
+                {tickerItems.map((item) => (
                   <div
-                    key={idx}
+                    key={item.id}
                     style={{
                       padding: '0.6rem',
                       borderRadius: '6px',
@@ -547,16 +571,17 @@ export const CoordinatorDashboard: React.FC = () => {
                       lineHeight: 1.3,
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, marginBottom: '0.2rem' }}>
-                      <span style={{ color: evt.type.includes('EMERGENCY') ? 'var(--crimson-500)' : 'var(--cyan-500)' }}>
-                        {evt.type}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 700, marginBottom: '0.2rem' }}>
+                      <span style={{ color: item.type.includes('EMERGENCY') || item.type.includes('SHORTAGE') ? 'var(--crimson-500)' : 'var(--cyan-500)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        {item.isLive && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--emerald-400)', display: 'inline-block' }} />}
+                        {item.type}
                       </span>
                       <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>
-                        {new Date().toLocaleTimeString()}
+                        {item.timestamp}
                       </span>
                     </div>
                     <div style={{ color: 'var(--text-muted)' }}>
-                      {evt.message || JSON.stringify(evt)}
+                      {item.message}
                     </div>
                   </div>
                 ))}

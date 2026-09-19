@@ -37,6 +37,23 @@ class DonorUpdateAvailability(BaseModel):
 from app.schemas.health_report import HealthReportOut
 
 
+class DonationHistoryItem(BaseModel):
+    id: str
+    request_id: Optional[str] = None
+    request_code: Optional[str] = None
+    hospital_name: Optional[str] = None
+    hospital_address: Optional[str] = None
+    component_type: str = "WHOLE_BLOOD"
+    blood_group: str
+    units: int = 1
+    status: str
+    donated_at: str
+    distance_km: Optional[float] = None
+    notes: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class DonorOut(BaseModel):
     id: str
     user_id: str
@@ -44,6 +61,13 @@ class DonorOut(BaseModel):
     date_of_birth: date
     weight_kg: float
     last_donation_date: Optional[date] = None
+    next_eligible_date: Optional[date] = None
+    days_until_eligible: Optional[int] = 0
+    interval_days_since_last_donation: Optional[int] = None
+    account_donation_status: Optional[str] = None
+    cooling_period_active: bool = False
+    is_fit_to_donate: bool = True
+    clinical_eligibility_reason: Optional[str] = None
     is_available: bool
     reliability_score: float
     total_successful_donations: int

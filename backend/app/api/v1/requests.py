@@ -436,6 +436,21 @@ async def fulfill_blood_request(
     lock_mgr = ConcurrencyLockManager(redis_conn)
     await lock_mgr.release_request_locks(blood_req.id)
 
+    if donor_ids:
+        manager.dispatch(
+            manager.broadcast_to_donors(
+                donor_ids,
+                {
+                    "type": "REQUEST_FULFILLED",
+                    "request_id": blood_req.id,
+                    "request_code": blood_req.code,
+                    "hospital_id": blood_req.hospital_id,
+                    "status": blood_req.status.value,
+                    "message": f"Blood request {blood_req.id[:8]} was successfully fulfilled and received by the hospital.",
+                },
+            )
+        )
+
     manager.dispatch(
         manager.broadcast_operational(
             {

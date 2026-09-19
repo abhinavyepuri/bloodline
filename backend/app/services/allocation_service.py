@@ -529,6 +529,13 @@ class AllocationService:
         at the remaining shortfall). Each accepted slot creates one Allocation
         record, so a single donor committing N bags fills N slots atomically.
         """
+        request = await self.db.get(BloodRequest, request_id)
+        if not request:
+            raise HTTPException(status_code=404, detail=f"Blood request '{request_id}' not found. Please provide a valid request ID.")
+
+        if request.status in (RequestStatus.FULFILLED, RequestStatus.CANCELLED, RequestStatus.EXPIRED):
+            raise HTTPException(status_code=400, detail=f"Blood request '{request_id}' is already {request.status.value}")
+
         redis_conn = await get_redis()
         lock_mgr = ConcurrencyLockManager(redis_conn)
 
@@ -734,12 +741,12 @@ class AllocationService:
                     "donor_id": donor_id,
                     "distance_km": distance_km,
                     "eta_minutes": eta_minutes,
-                    "bags_committed": len(slots),
+                    "bags_committed": len(claimed_slots),
                     "units_covered": covered,
                     "units_requested": request.units_requested,
                     "status": request.status.value,
                     "message": (
-                        f"Your offer to donate {len(slots)} bag(s) is confirmed. Please head toward the hospital."
+                        f"Your offer to donate {len(claimed_slots)} bag(s) is confirmed. Please head toward the hospital."
                     ),
                 },
             )
@@ -753,11 +760,11 @@ class AllocationService:
                     "donor_id": donor_id,
                     "distance_km": distance_km,
                     "eta_minutes": eta_minutes,
-                    "bags_committed": len(slots),
+                    "bags_committed": len(claimed_slots),
                     "units_covered": covered,
                     "units_requested": request.units_requested,
                     "status": request.status.value,
-                    "message": f"Nearby volunteer donor agreed to donate {len(slots)} unit(s).",
+                    "message": f"Nearby volunteer donor agreed to donate {len(claimed_slots)} unit(s).",
                 }
             )
         )
@@ -817,13 +824,14 @@ class AllocationService:
         return {
             "status": "HARD_LOCKED_COMMITTED",
             "allocation_id": created_allocations[0].id if created_allocations else None,
+            "allocation_ids": [a.id for a in created_allocations],
             "donor_id": donor_id,
             "slot": slot,
             "slots": claimed_slots,
             "bags_claimed": len(claimed_slots),
             "distance_km": distance_km,
             "estimated_transit_minutes": eta_minutes,
-            "bags_committed": len(slots),
+            "bags_committed": len(claimed_slots),
             "units_covered": covered,
             "units_requested": request.units_requested,
             "shortfall": max(remaining, 0),
@@ -1030,6 +1038,26 @@ class AllocationService:
                         f"({trigger_reason}). Alerting {len(donors)} nearby volunteer donors."
                     ),
                 },
+            )
+            await manager.broadcast_operational(
+                {
+                    "type": "EMERGENCY_BROADCAST_SENT",
+                    "request_id": request.id,
+                    "request_code": request.code,
+                    "hospital_name": hospital.name if hospital else "Emergency Medical Center",
+                    "blood_group": request.required_blood_group,
+                    "component_type": request.component_type.value,
+                    "units_needed": shortfall,
+                    "units_requested": request.units_requested,
+                    "units_covered": retained,
+                    "donor_count": len(donors),
+                    "radius_km": radius_used,
+                    "is_replan": True,
+                    "message": (
+                        f"Re-planning: Notified {len(donors)} nearby volunteer donors for {shortfall} replacement unit(s) of "
+                        f"{request.required_blood_group} ({request.component_type.value}) at {hospital.name if hospital else 'Emergency Medical Center'}."
+                    ),
+                }
             )
             await manager.broadcast_to_hospital(
                 request.hospital_id,

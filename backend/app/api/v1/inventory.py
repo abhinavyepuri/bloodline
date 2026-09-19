@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import and_, or_, select
@@ -27,6 +27,7 @@ from app.schemas.inventory import (
     InventoryUnitCreate,
     InventoryUnitOut,
     InventoryUnitUpdateStatus,
+    HospitalOrderAcceptRequest,
 )
 from app.services.allocation_service import AllocationService
 from app.services.donor_service import is_plasma_derived
@@ -42,6 +43,15 @@ DEFAULT_SHELF_LIFE_DAYS = {
     BloodComponentType.FFP: 365,
     BloodComponentType.CRYOPRECIPITATE: 365,
     BloodComponentType.WHOLE_BLOOD: 35,
+}
+
+# Standard fixed volume in mL per component type
+DEFAULT_VOLUME_ML_BY_COMPONENT = {
+    BloodComponentType.PRBC: 350.0,
+    BloodComponentType.WHOLE_BLOOD: 450.0,
+    BloodComponentType.PLATELETS: 250.0,
+    BloodComponentType.FFP: 250.0,
+    BloodComponentType.CRYOPRECIPITATE: 20.0,
 }
 
 # Stock operations belong to blood banks; coordinators and admins may step in.
@@ -83,6 +93,78 @@ async def list_inventory(
     return [InventoryUnitOut.model_validate(u) for u in res.scalars().all()]
 
 
+async def _notify_and_replan_for_new_inventory(
+    db: AsyncSession,
+    added_types: set,
+    trigger_note: str,
+) -> None:
+    """
+    1. For requests in RE_PLANNING matching added types, trigger replanning.
+    2. For requests in PROXIMITY_ZONE_NOTIFIED (routed to donors) matching added types,
+       broadcast INVENTORY_DEFICIT_COVERED to update the blood bank desk in real time.
+    """
+    if not added_types:
+        return
+
+    alloc_svc = AllocationService(db)
+    type_filters = [
+        and_(
+            BloodRequest.required_blood_group == bg,
+            BloodRequest.component_type == comp,
+        )
+        for bg, comp in added_types
+    ]
+
+    # 1. Unblock RE_PLANNING requests
+    replan_query = select(BloodRequest).where(
+        and_(
+            BloodRequest.status == RequestStatus.RE_PLANNING,
+            or_(*type_filters),
+        )
+    )
+    replan_res = await db.execute(replan_query)
+    for req in replan_res.scalars().all():
+        await alloc_svc.replan_request(
+            req.id,
+            trigger_reason=trigger_note,
+        )
+
+    # 2. Notify blood bank desk of donor-routed requests that now have stock available
+    donor_routed_query = (
+        select(BloodRequest)
+        .options(selectinload(BloodRequest.hospital))
+        .where(
+            and_(
+                BloodRequest.status == RequestStatus.PROXIMITY_ZONE_NOTIFIED,
+                or_(*type_filters),
+            )
+        )
+    )
+    donor_res = await db.execute(donor_routed_query)
+    for req in donor_res.scalars().all():
+        hosp_name = req.hospital.name if req.hospital else "Emergency Medical Center"
+        covered = await alloc_svc.covered_unit_count(req.id)
+        shortfall = max(0, req.units_requested - covered)
+        await manager.broadcast_operational(
+            {
+                "type": "INVENTORY_DEFICIT_COVERED",
+                "request_id": req.id,
+                "request_code": req.code or f"REQ-{req.id[:6].upper()}",
+                "hospital_name": hosp_name,
+                "blood_group": req.required_blood_group,
+                "component_type": req.component_type.value,
+                "units_covered": covered,
+                "units_requested": req.units_requested,
+                "shortfall": shortfall,
+                "status": req.status.value,
+                "message": (
+                    f"⚡ Stock Updated: Newly added units in storage match Request {req.code or req.id[:6]} "
+                    f"for {hosp_name} ({req.required_blood_group}) previously routed to donors."
+                ),
+            }
+        )
+
+
 @router.post("/units", response_model=InventoryUnitOut, status_code=status.HTTP_201_CREATED)
 async def register_inventory_unit(
     unit_in: InventoryUnitCreate,
@@ -92,8 +174,6 @@ async def register_inventory_unit(
     """[USER-FACING] Log a new verified blood unit into blood bank stock."""
     bank = await _owning_bank(db, current_user)
     if bank is None:
-        # Elevated caller: they must say which bank the stock belongs to rather than
-        # having it silently attached to whichever bank happens to be first.
         if not unit_in.blood_bank_id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -153,29 +233,13 @@ async def register_inventory_unit(
             }
         )
 
-    # New stock can immediately unblock active requests needing compatible blood
-    active_requests_res = await db.execute(
-        select(BloodRequest)
-        .options(selectinload(BloodRequest.allocations))
-        .where(
-            BloodRequest.status.in_([
-                RequestStatus.PROXIMITY_ZONE_NOTIFIED,
-                RequestStatus.RE_PLANNING,
-                RequestStatus.PENDING_EVALUATION,
-            ])
-        )
-        .order_by(BloodRequest.calculated_urgency_score.desc(), BloodRequest.created_at.asc())
+    # Automatically check and unblock/notify for active requests
+    distinct_types = {(u.blood_group, u.component_type) for u in created_units}
+    await _notify_and_replan_for_new_inventory(
+        db=db,
+        added_types=distinct_types,
+        trigger_note=f"Inventory intake: {len(created_units)} packet(s) logged into stock",
     )
-    alloc_svc = AllocationService(db)
-    for req in active_requests_res.scalars().all():
-        compat_groups = MatchingEngineService.get_compatible_donor_types(
-            req.required_blood_group, is_plasma=is_plasma_derived(req.component_type)
-        )
-        if unit_in.blood_group in compat_groups and req.component_type == unit_in.component_type and req.units_shortfall > 0:
-            await alloc_svc.replan_request(
-                req.id, trigger_reason=f"New compatible inventory units ({qty} packets of {unit_in.blood_group}) added to storage"
-            )
-            break
 
     return InventoryUnitOut.model_validate(created_units[0])
 
@@ -248,28 +312,13 @@ async def register_inventory_units_batch(
             }
         )
 
-    active_requests_res = await db.execute(
-        select(BloodRequest)
-        .options(selectinload(BloodRequest.allocations))
-        .where(
-            BloodRequest.status.in_([
-                RequestStatus.PROXIMITY_ZONE_NOTIFIED,
-                RequestStatus.RE_PLANNING,
-                RequestStatus.PENDING_EVALUATION,
-            ])
-        )
-        .order_by(BloodRequest.calculated_urgency_score.desc(), BloodRequest.created_at.asc())
+    # Automatically check and unblock/notify for active requests
+    distinct_types = {(u.blood_group, u.component_type) for u in created_units}
+    await _notify_and_replan_for_new_inventory(
+        db=db,
+        added_types=distinct_types,
+        trigger_note=f"Batch inventory intake: {len(created_units)} packet(s) logged into stock",
     )
-    alloc_svc = AllocationService(db)
-    for req in active_requests_res.scalars().all():
-        compat_groups = MatchingEngineService.get_compatible_donor_types(
-            req.required_blood_group, is_plasma=is_plasma_derived(req.component_type)
-        )
-        if unit_in.blood_group in compat_groups and req.component_type == unit_in.component_type and req.units_shortfall > 0:
-            await alloc_svc.replan_request(
-                req.id, trigger_reason=f"New compatible inventory units ({qty} packets of {unit_in.blood_group}) added to storage"
-            )
-            break
 
     return [InventoryUnitOut.model_validate(u) for u in created_units]
 
@@ -368,12 +417,15 @@ async def register_inventory_batch(
             else:
                 batch_code = f"BB-{uuid.uuid4().hex[:7].upper()}"
 
+            default_vol = DEFAULT_VOLUME_ML_BY_COMPONENT.get(item.component_type, 350.0)
+            vol = item.volume_ml if item.volume_ml and item.volume_ml > 0 else default_vol
+
             unit = InventoryUnit(
                 blood_bank_id=effective_bank_id,
                 batch_number=batch_code,
                 blood_group=item.blood_group,
                 component_type=item.component_type,
-                volume_ml=item.volume_ml,
+                volume_ml=vol,
                 collection_date=coll_date,
                 expiry_date=exp_date,
                 status=UnitStatus.AVAILABLE,
@@ -405,29 +457,13 @@ async def register_inventory_batch(
         }
     )
 
-    # Unblock any requests waiting in RE_PLANNING matching any of the added groups
+    # Unblock / re-plan any requests waiting in RE_PLANNING or notify for donor-routed requests
     if distinct_types_added:
-        alloc_svc = AllocationService(db)
-        type_filters = [
-            and_(
-                BloodRequest.required_blood_group == bg,
-                BloodRequest.component_type == comp,
-            )
-            for bg, comp in distinct_types_added
-        ]
-        replan_requests_res = await db.execute(
-            select(BloodRequest).where(
-                and_(
-                    BloodRequest.status == RequestStatus.RE_PLANNING,
-                    or_(*type_filters),
-                )
-            )
+        await _notify_and_replan_for_new_inventory(
+            db=db,
+            added_types=distinct_types_added,
+            trigger_note=f"Batch inventory addition: {len(units_to_add)} packet(s) logged into stock",
         )
-        for req in replan_requests_res.scalars().all():
-            await alloc_svc.replan_request(
-                req.id,
-                trigger_reason=f"Batch inventory addition: {len(units_to_add)} packet(s) logged into stock",
-            )
 
     return [InventoryUnitOut.model_validate(u) for u in units_to_add]
 
@@ -469,6 +505,14 @@ async def update_unit_status(
             "new_status": unit.status.value,
         }
     )
+
+    # If unit status changed to AVAILABLE, check if any active requests can be unblocked/notified
+    if status_in.status == UnitStatus.AVAILABLE and old_status != UnitStatus.AVAILABLE:
+        await _notify_and_replan_for_new_inventory(
+            db=db,
+            added_types={(unit.blood_group, unit.component_type)},
+            trigger_note=f"Unit {unit.batch_number} marked available in stock",
+        )
 
     # A reserved unit that is quarantined or expired invalidates its allocation, so the
     # affected request has to be re-planned.
@@ -540,11 +584,13 @@ async def list_incoming_hospital_orders(
                         "allocation_id": alloc.id,
                     }
                 )
-            elif alloc.donor:
+            elif alloc.source_type == AllocationSourceType.LIVE_DONOR or alloc.donor_id or alloc.donor:
+                donor_id = alloc.donor.id if alloc.donor else (alloc.donor_id or f"donor-{alloc.id[:6]}")
+                donor_bg = alloc.donor.blood_group if alloc.donor else (alloc.blood_group or req.required_blood_group)
                 volunteer_donors.append(
                     {
-                        "donor_id": alloc.donor.id,
-                        "blood_group": alloc.donor.blood_group,
+                        "donor_id": donor_id,
+                        "blood_group": donor_bg,
                         "allocation_status": alloc.status.value,
                         "allocation_id": alloc.id,
                         "distance_km": alloc.distance_km,
@@ -755,6 +801,7 @@ async def accept_hospital_order(
             request_id=blood_req.id,
             decision_type="BLOOD_BANK_ACCEPTED",
             urgency_score=blood_req.calculated_urgency_score,
+            candidate_scores_json={"batches": batches, "auto_dispatch": auto_dispatch},
             selected_resource_id=", ".join(batches),
             rationale_summary=(
                 f"Blood bank staff accepted request and {'dispatched' if auto_dispatch else 'reserved'} "

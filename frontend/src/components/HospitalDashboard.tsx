@@ -13,6 +13,13 @@ const COMPONENT_LABELS: Record<BloodComponentType, string> = {
   CRYOPRECIPITATE: 'Cryoprecipitate',
 };
 
+const TRIAGE_DEFAULT_HOURS: Record<TriageLevel, number> = {
+  MASSIVE_TRANSFUSION_PROTOCOL: 1, // Critical: 1-2 hours
+  ACTIVE_TRAUMA: 5,                // High: 5-6 hours
+  SCHEDULED_EMERGENCY_RESERVE: 10, // Medium: 10-12 hours
+  ROUTINE_CLINICAL: 24,            // Standard: 18-24 hours
+};
+
 export const HospitalDashboard: React.FC = () => {
   const { user } = useAuth();
   const { lastEvent } = useWebSocket();
@@ -27,9 +34,13 @@ export const HospitalDashboard: React.FC = () => {
   const [componentType, setComponentType] = useState<BloodComponentType>('PRBC');
   const [units, setUnits] = useState(2);
   const [triageLevel, setTriageLevel] = useState<TriageLevel>('MASSIVE_TRANSFUSION_PROTOCOL');
-  const [deadlineMinutes, setDeadlineMinutes] = useState(15);
-  const [fulfillmentMode, setFulfillmentMode] = useState<'AUTO' | 'DIRECT_DONOR'>('AUTO');
+  const [deadlineHours, setDeadlineHours] = useState<number>(1);
   const [submitting, setSubmitting] = useState(false);
+
+  const handleTriageChange = (newTriage: TriageLevel) => {
+    setTriageLevel(newTriage);
+    setDeadlineHours(TRIAGE_DEFAULT_HOURS[newTriage] ?? 1);
+  };
 
   // Pagination
   const PAGE_SIZE = 5;
@@ -101,7 +112,7 @@ export const HospitalDashboard: React.FC = () => {
     setSubmitting(true);
     setError(null);
 
-    const deadlineAt = new Date(Date.now() + deadlineMinutes * 60000).toISOString();
+    const deadlineAt = new Date(Date.now() + Number(deadlineHours) * 3600 * 1000).toISOString();
     const payload = {
       patient_id_token: patientIdToken.trim() || `PT-${Math.floor(100000 + Math.random() * 900000)}`,
       required_blood_group: bloodGroup,
@@ -109,7 +120,7 @@ export const HospitalDashboard: React.FC = () => {
       units_requested: Number(units),
       triage_level: triageLevel,
       deadline_at: deadlineAt,
-      fulfillment_mode: fulfillmentMode,
+      fulfillment_mode: 'AUTO',
     };
 
     try {
@@ -250,42 +261,28 @@ export const HospitalDashboard: React.FC = () => {
               id="intake-triage"
               className="select-field"
               value={triageLevel}
-              onChange={(e) => setTriageLevel(e.target.value as TriageLevel)}
+              onChange={(e) => handleTriageChange(e.target.value as TriageLevel)}
             >
-              <option value="MASSIVE_TRANSFUSION_PROTOCOL">🔴 Life-Threatening Emergency (Needed in &lt;15 mins)</option>
-              <option value="ACTIVE_TRAUMA">🟠 Severe Injury / Accident (Needed in &lt;1 hour)</option>
-              <option value="SCHEDULED_EMERGENCY_RESERVE">🟡 Urgent Surgery (Needed in &lt;4 hours)</option>
-              <option value="ROUTINE_CLINICAL">🟢 Standard Delivery (Needed in &lt;24 hours)</option>
+              <option value="MASSIVE_TRANSFUSION_PROTOCOL">🔴 Critical (1-2 hrs)</option>
+              <option value="ACTIVE_TRAUMA">🟠 High (5-6 hrs)</option>
+              <option value="SCHEDULED_EMERGENCY_RESERVE">🟡 Medium (10-12 hrs)</option>
+              <option value="ROUTINE_CLINICAL">🟢 Standard (18-24 hrs)</option>
             </select>
           </div>
 
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-              Fulfillment Strategy
-            </label>
-            <select
-              id="intake-fulfillment-mode"
-              className="select-field"
-              value={fulfillmentMode}
-              onChange={(e) => setFulfillmentMode(e.target.value as 'AUTO' | 'DIRECT_DONOR')}
-            >
-              <option value="AUTO">⚡ Auto-Match (Cold-Chain Inventory first, then Volunteer Donors)</option>
-              <option value="DIRECT_DONOR">🚨 Direct Volunteer Donor Dispatch (Broadcast to Live Donors immediately)</option>
-            </select>
-          </div>
-
-          <div>
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
-              Needed Within (Minutes)
+              Needed Within (Hours)
             </label>
             <input
               id="intake-deadline"
               type="number"
-              min="5"
-              max="1440"
+              min="1"
+              max="72"
+              step="1"
               className="input-field"
-              value={deadlineMinutes}
-              onChange={(e) => setDeadlineMinutes(Number(e.target.value))}
+              value={deadlineHours}
+              onChange={(e) => setDeadlineHours(Math.max(1, Number(e.target.value)))}
             />
           </div>
 
@@ -390,15 +387,13 @@ export const HospitalDashboard: React.FC = () => {
         ) : (
           (() => {
             const totalReqs = requests.length;
-            const visibleReqs = requests.slice(0, reqsPage * PAGE_SIZE);
-            const hasMoreReqs = totalReqs > visibleReqs.length;
-            const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE);
+            const startIdx = (reqsPage - 1) * PAGE_SIZE;
+            const visibleReqs = requests.slice(startIdx, startIdx + PAGE_SIZE);
+            const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE) || 1;
             return (
               <div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  {visibleReqs.map((req) => {
-                    const urgency = req.calculated_urgency_score;
-                    const isUrgent = urgency >= 80;
+                  {visibleReqs.map((req, index) => {
                     const covered = req.units_covered ?? 0;
                     const shortfall = req.units_shortfall ?? Math.max(req.units_requested - covered, 0);
                     const fullyCovered = shortfall === 0;
@@ -409,6 +404,7 @@ export const HospitalDashboard: React.FC = () => {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '0.78rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', fontWeight: 700 }}>#{startIdx + index + 1}</span>
                               <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
                                 {req.units_requested}x {req.required_blood_group} ({COMPONENT_LABELS[req.component_type] ?? req.component_type})
                               </span>
@@ -417,12 +413,6 @@ export const HospitalDashboard: React.FC = () => {
                               </span>
                             </div>
                             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Patient: <code>{req.patient_id_token}</code></div>
-                          </div>
-                          <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>URGENCY LEVEL</div>
-                            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: isUrgent ? 'var(--crimson-500)' : 'var(--cyan-400)' }}>
-                              {urgency.toFixed(0)} <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>/ 100</span>
-                            </div>
                           </div>
                         </div>
 
@@ -440,27 +430,80 @@ export const HospitalDashboard: React.FC = () => {
                           <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.5rem', textTransform: 'uppercase' }}>Where This Blood Is Coming From:</div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
-                              {req.allocations.map((alloc) => (
-                                <div key={alloc.id} style={{ background: 'var(--color-bg)', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem' }}>
-                                  <Truck size={14} color="var(--emerald-400)" />
-                                  <span><b>{alloc.source_type === 'BLOOD_BANK_INVENTORY' ? '📦 From Blood Bank Storage' : '🙋 From Volunteer Donor'}</b>{alloc.distance_km != null && ` (~${alloc.distance_km}km away, ETA ~${alloc.estimated_transit_minutes} min)`}</span>
-                                  <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>Confirmed</span>
-                                </div>
-                              ))}
+                              {(() => {
+                                const bankGroups: Record<string, { count: number; batches: string[]; alloc: typeof req.allocations[0] }> = {};
+                                const donorGroups: Record<string, { count: number; alloc: typeof req.allocations[0] }> = {};
+
+                                req.allocations.forEach((alloc) => {
+                                  if (alloc.source_type === 'LIVE_DONOR' && alloc.donor_id) {
+                                    if (!donorGroups[alloc.donor_id]) {
+                                      donorGroups[alloc.donor_id] = { count: 0, alloc };
+                                    }
+                                    donorGroups[alloc.donor_id].count += 1;
+                                  } else {
+                                    const key = 'BLOOD_BANK_STORAGE';
+                                    if (!bankGroups[key]) {
+                                      bankGroups[key] = { count: 0, batches: [], alloc };
+                                    }
+                                    bankGroups[key].count += 1;
+                                    if (alloc.batch_number && !bankGroups[key].batches.includes(alloc.batch_number)) {
+                                      bankGroups[key].batches.push(alloc.batch_number);
+                                    }
+                                  }
+                                });
+
+                                return (
+                                  <>
+                                    {Object.entries(bankGroups).map(([key, group]) => {
+                                      const distStr = group.alloc.distance_km != null ? ` (~${Number(group.alloc.distance_km).toFixed(2)}km away, ETA ~${group.alloc.estimated_transit_minutes} min)` : '';
+                                      const batchesStr = group.batches.length > 0 ? ` (${group.batches.length > 1 ? 'Batches' : 'Batch'} ${group.batches.join(', ')})` : '';
+                                      return (
+                                        <div key={key} style={{ background: 'var(--color-bg)', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem' }}>
+                                          <Truck size={14} color="var(--emerald-400)" />
+                                          <span>
+                                            <b>📦 {group.count} x {req.required_blood_group} ({COMPONENT_LABELS[req.component_type] || req.component_type}) From Blood Bank Storage</b>
+                                            {batchesStr}
+                                            {distStr}
+                                          </span>
+                                          <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>
+                                            {group.count > 1 ? `${group.count} Bags Confirmed` : 'Confirmed'}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+
+                                    {Object.entries(donorGroups).map(([donorId, group]) => {
+                                      const distStr = group.alloc.distance_km != null ? ` (~${Number(group.alloc.distance_km).toFixed(2)}km away, ETA ~${group.alloc.estimated_transit_minutes} min)` : '';
+                                      return (
+                                        <div key={donorId} style={{ background: 'var(--color-bg)', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem' }}>
+                                          <Truck size={14} color="var(--emerald-400)" />
+                                          <span>
+                                            <b>🙋 {group.count} x {req.required_blood_group} ({COMPONENT_LABELS[req.component_type] || req.component_type}) From Volunteer Donor</b>
+                                            {distStr}
+                                          </span>
+                                          <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>
+                                            {group.count > 1 ? `${group.count} Bags Confirmed` : 'Confirmed'}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </>
+                                );
+                              })()}
                             </div>
                           </div>
                         )}
 
                         <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
                           <button id={`btn-explain-${req.id}`} onClick={() => viewExplanation(req.id)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}>
-                            <Info size={14} /> Why this choice?
+                            <Info size={14} />
                           </button>
                           {!isClosed && (
                             <button id={`btn-cancel-${req.id}`} onClick={() => handleCancel(req.id)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}>Cancel Request</button>
                           )}
-                          {req.status === 'COMMITTED_IN_TRANSIT' && fullyCovered && (
-                            <button id={`btn-fulfill-${req.id}`} onClick={() => handleFulfill(req.id)} className="btn btn-cyan" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}>
-                              <CheckCircle2 size={14} /> Confirm Blood Received
+                          {!isClosed && covered > 0 && (
+                            <button id={`btn-fulfill-${req.id}`} onClick={() => handleFulfill(req.id, !fullyCovered)} className="btn btn-cyan" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <CheckCircle2 size={14} /> {fullyCovered ? 'Confirm Blood Received & Donated' : `Confirm Received (${covered}/${req.units_requested} Bags)`}
                             </button>
                           )}
                         </div>
@@ -468,17 +511,15 @@ export const HospitalDashboard: React.FC = () => {
                     );
                   })}
                 </div>
-                {(hasMoreReqs || totalReqs > PAGE_SIZE) && (
+                {totalReqs > PAGE_SIZE && (
                   <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleReqs.length} of {totalReqs} requests</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Showing {startIdx + 1}–{Math.min(reqsPage * PAGE_SIZE, totalReqs)} of {totalReqs} requests
+                    </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      {totalReqs > 10 ? (
-                        Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
-                          <button key={p} onClick={() => setReqsPage(p)} className={`btn ${reqsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
-                        ))
-                      ) : hasMoreReqs ? (
-                        <button onClick={() => setReqsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
-                      ) : null}
+                      {Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
+                        <button key={p} onClick={() => setReqsPage(p)} className={`btn ${reqsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                      ))}
                     </div>
                   </div>
                 )}

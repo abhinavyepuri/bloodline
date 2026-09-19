@@ -26,6 +26,7 @@ import {
   Check,
   Package,
   TrendingUp,
+  Search,
 } from 'lucide-react';
 
 interface HospitalOrder {
@@ -75,6 +76,14 @@ interface MultiRowItem {
   expiry_days: number;
 }
 
+export const STANDARD_COMPONENT_SPEC: Record<BloodComponentType, { volume_ml: number; expiry_days: number; label: string }> = {
+  PRBC: { volume_ml: 350, expiry_days: 42, label: 'Red Blood Cells (PRBC)' },
+  WHOLE_BLOOD: { volume_ml: 450, expiry_days: 35, label: 'Whole Blood' },
+  PLATELETS: { volume_ml: 250, expiry_days: 5, label: 'Platelets' },
+  FFP: { volume_ml: 250, expiry_days: 365, label: 'Fresh Frozen Plasma (FFP)' },
+  CRYOPRECIPITATE: { volume_ml: 20, expiry_days: 365, label: 'Cryoprecipitate' },
+};
+
 const DEFAULT_EXPIRY_BY_COMPONENT: Record<BloodComponentType, number> = {
   PRBC: 42,
   WHOLE_BLOOD: 35,
@@ -82,6 +91,9 @@ const DEFAULT_EXPIRY_BY_COMPONENT: Record<BloodComponentType, number> = {
   FFP: 365,
   CRYOPRECIPITATE: 365,
 };
+
+type DeskSortKey = 'urgency' | 'hospital' | 'blood_group' | 'units' | 'shortfall' | 'status' | 'created_at';
+type InvSortKey = 'batch' | 'group' | 'type' | 'volume' | 'expiry' | 'status';
 
 export const BloodBankDashboard: React.FC = () => {
   const { lastEvent } = useWebSocket();
@@ -98,36 +110,56 @@ export const BloodBankDashboard: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [modalTab, setModalTab] = useState<'BATCH_GENERATOR' | 'MULTI_ROW' | 'SINGLE'>('BATCH_GENERATOR');
   const [submitting, setSubmitting] = useState(false);
+  const [registering, setRegistering] = useState(false);
+  const [newPacketsCount, setNewPacketsCount] = useState<number>(1);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [liveAlert, setLiveAlert] = useState<{
+    type: 'broadcast' | 'donor_claim' | 'donor_status' | 'order' | 'inventory_match';
+    title: string;
+    message: string;
+    timestamp: string;
+  } | null>(null);
+
+  // Expanded orders & desk sorting/filtering
+  const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
+  const [deskSortKey, setDeskSortKey] = useState<DeskSortKey>('urgency');
+  const [deskSortAsc, setDeskSortAsc] = useState<boolean>(false);
+  const [deskFilter, setDeskFilter] = useState<'ALL' | 'ACTION_REQUIRED' | 'DISPATCHED'>('ALL');
+  const [deskSearch, setDeskSearch] = useState<string>('');
+  const [invSortKey, setInvSortKey] = useState<InvSortKey>('expiry');
+  const [invSortAsc, setInvSortAsc] = useState<boolean>(true);
 
   // Pagination state for each list section
   const PAGE_SIZE = 5;
+  const FORECAST_PAGE_SIZE = 8;
   const [ordersPage, setOrdersPage] = useState(1);
   const [requestsPage, setRequestsPage] = useState(1);
   const [donorsPage, setDonorsPage] = useState(1);
   const [unitsPage, setUnitsPage] = useState(1);
+  const [forecastPage, setForecastPage] = useState(1);
 
   // Single unit form
   const [newBatch, setNewBatch] = useState('');
   const [newBloodGroup, setNewBloodGroup] = useState('O-');
   const [newComponent, setNewComponent] = useState<BloodComponentType>('PRBC');
   const [newExpiryDays, setNewExpiryDays] = useState(42);
-  const [newVolume, setNewVolume] = useState(450);
+  const [newVolume, setNewVolume] = useState(350);
 
   // Quick Batch Generator form
   const [batchBloodGroup, setBatchBloodGroup] = useState('O-');
   const [batchComponent, setBatchComponent] = useState<BloodComponentType>('PRBC');
   const [batchQuantity, setBatchQuantity] = useState(5);
   const [batchPrefix, setBatchPrefix] = useState('BB-DRIVE-');
-  const [batchVolume, setBatchVolume] = useState(450);
+  const [batchVolume, setBatchVolume] = useState(350);
   const [batchExpiryDays, setBatchExpiryDays] = useState(42);
 
   // Multi-Row Table form
   const [multiRows, setMultiRows] = useState<MultiRowItem[]>([
-    { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
-    { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 6, volume_ml: 450, expiry_days: 42 },
-    { id: '3', blood_group: 'A+', component_type: 'PLATELETS', quantity: 3, volume_ml: 300, expiry_days: 5 },
+    { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 4, volume_ml: 350, expiry_days: 42 },
+    { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 6, volume_ml: 350, expiry_days: 42 },
+    { id: '3', blood_group: 'A+', component_type: 'PLATELETS', quantity: 3, volume_ml: 250, expiry_days: 5 },
   ]);
 
   const fetchInventoryAndOrders = useCallback(async () => {
@@ -138,8 +170,8 @@ export const BloodBankDashboard: React.FC = () => {
         api.get<HospitalOrder[]>('/inventory/orders'),
         api.get<BloodRequest[]>('/requests'),
         api.get<DonorPublic[]>('/donors'),
-        api.get<SeriesForecast[]>('/ml/forecasts').catch(() => [] as SeriesForecast[]),
-        api.get<PredictionSummary>('/ml/forecasts/summary').catch(() => null),
+        api.get<SeriesForecast[]>('/predictions/forecast').catch(() => [] as SeriesForecast[]),
+        api.get<PredictionSummary>('/predictions/summary').catch(() => null),
       ]);
       setUnits(invData);
       setOrders(ordersData);
@@ -165,26 +197,86 @@ export const BloodBankDashboard: React.FC = () => {
   }, [fetchInventoryAndOrders]);
 
   useEffect(() => {
-    if (
-      lastEvent &&
-      [
-        'REQUEST_CREATED',
-        'REQUEST_UPDATED',
-        'EMERGENCY_BROADCAST_SENT',
-        'INVENTORY_UNIT_ADDED',
-        'INVENTORY_UNIT_STATUS_CHANGED',
-        'INVENTORY_LOCKED',
-        'BLOOD_BANK_ACCEPTED',
-        'BLOOD_BANK_DISPATCHED',
-        'ALLOCATION_CONFIRMED',
-        'ALLOCATION_COMPLETED',
-        'REQUEST_FULFILLED',
-        'REQUEST_CANCELLED',
-        'RE_PLANNING_TRIGGERED',
-        'SYSTEM_RESET',
-      ].includes(lastEvent.type)
-    ) {
+    if (!lastEvent) return;
+
+    const monitoredEvents = [
+      'REQUEST_CREATED',
+      'REQUEST_UPDATED',
+      'EMERGENCY_BROADCAST_SENT',
+      'EMERGENCY_DISPATCH_ALERT',
+      'EMERGENCY_DONOR_ALERT',
+      'DONOR_CLAIM_SUCCESS',
+      'DONOR_AVAILABILITY_CHANGED',
+      'DONOR_HEALTH_EVALUATED',
+      'DONOR_REGISTERED',
+      'DONOR_STAND_DOWN',
+      'DONOR_PROXIMITY_ALERT',
+      'DONOR_PROXIMITY_BROADCAST',
+      'UNITS_STILL_NEEDED',
+      'INVENTORY_UNIT_ADDED',
+      'INVENTORY_UNIT_STATUS_CHANGED',
+      'INVENTORY_LOCKED',
+      'BLOOD_BANK_ACCEPTED',
+      'BLOOD_BANK_DISPATCHED',
+      'ALLOCATION_CONFIRMED',
+      'ALLOCATION_COMPLETED',
+      'REQUEST_FULFILLED',
+      'REQUEST_CANCELLED',
+      'RE_PLANNING_TRIGGERED',
+      'RE_PLAN_INVENTORY_REPLACEMENT',
+      'INVENTORY_DEFICIT_COVERED',
+      'ALTERNATIVE_FOUND',
+      'INVENTORY_RESTOCKED_DEFICIT_UPDATED',
+      'SYSTEM_RESET',
+    ];
+
+    if (monitoredEvents.includes(lastEvent.type)) {
       fetchInventoryAndOrders();
+
+      // Capture real-time live alert for blood bank staff
+      const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      if (
+        lastEvent.type === 'EMERGENCY_BROADCAST_SENT' ||
+        lastEvent.type === 'EMERGENCY_DISPATCH_ALERT' ||
+        lastEvent.type === 'EMERGENCY_DONOR_ALERT' ||
+        lastEvent.type === 'DONOR_PROXIMITY_BROADCAST'
+      ) {
+        setLiveAlert({
+          type: 'broadcast',
+          title: '🚨 Live Emergency Broadcast Active',
+          message: lastEvent.message || 'System dispatched emergency alerts to eligible nearby volunteer donors.',
+          timestamp: nowStr,
+        });
+      } else if (lastEvent.type === 'DONOR_CLAIM_SUCCESS') {
+        setLiveAlert({
+          type: 'donor_claim',
+          title: '✅ Volunteer Donor Accepted Request',
+          message: lastEvent.message || 'A nearby volunteer donor agreed to donate and confirmed units.',
+          timestamp: nowStr,
+        });
+      } else if (lastEvent.type === 'DONOR_AVAILABILITY_CHANGED') {
+        const isAvail = (lastEvent as any).is_available;
+        setLiveAlert({
+          type: 'donor_status',
+          title: '📍 Donor Availability Updated',
+          message: (lastEvent as any).message || `Volunteer donor is now ${isAvail ? 'Active & Available' : 'Offline'}.`,
+          timestamp: nowStr,
+        });
+      } else if (
+        lastEvent.type === 'INVENTORY_DEFICIT_COVERED' ||
+        lastEvent.type === 'ALTERNATIVE_FOUND' ||
+        lastEvent.type === 'RE_PLAN_INVENTORY_REPLACEMENT' ||
+        lastEvent.type === 'INVENTORY_RESTOCKED_DEFICIT_UPDATED'
+      ) {
+        setLiveAlert({
+          type: 'inventory_match',
+          title: '⚡ Stock Replenished & Matched (Previously Routed to Donors)',
+          message:
+            lastEvent.message ||
+            `Newly added units matched a hospital request previously routed to donors. Stock reserved and ready for dispatch!`,
+          timestamp: nowStr,
+        });
+      }
     }
   }, [lastEvent, fetchInventoryAndOrders]);
 
@@ -245,9 +337,26 @@ export const BloodBankDashboard: React.FC = () => {
       });
       setShowAddModal(false);
       setNewBatch('');
-      setStatusMessage({ type: 'success', text: `Successfully registered 1 unit of ${newBloodGroup} (${newComponent})!` });
-      setTimeout(() => setStatusMessage(null), 5000);
+
       await fetchInventoryAndOrders();
+      const updatedOrders = await api.get<HospitalOrder[]>('/inventory/orders');
+      const matchedOrder = updatedOrders.find(
+        (o) =>
+          o.required_blood_group === newBloodGroup &&
+          (o.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE') || (o.volunteer_donors && o.volunteer_donors.length > 0))
+      );
+      if (matchedOrder) {
+        setStatusMessage({
+          type: 'success',
+          text: `⚡ Update Response: Added 1 unit of ${newBloodGroup} (${newComponent}) matched Request for ${matchedOrder.hospital_name} (previously routed to donors). Stock reserved and ready for dispatch!`,
+        });
+      } else {
+        setStatusMessage({
+          type: 'success',
+          text: `Successfully registered 1 unit of ${newBloodGroup} (${newComponent}) into storage!`,
+        });
+      }
+      setTimeout(() => setStatusMessage(null), 6000);
     } catch (err) {
       alert('Error registering blood unit: ' + (err instanceof Error ? err.message : err));
     } finally {
@@ -269,12 +378,26 @@ export const BloodBankDashboard: React.FC = () => {
         expiry_days: batchExpiryDays,
       });
       setShowAddModal(false);
-      setStatusMessage({
-        type: 'success',
-        text: `Successfully batch added ${res.length} packets of ${batchBloodGroup} (${batchComponent}) into storage!`,
-      });
-      setTimeout(() => setStatusMessage(null), 5000);
+
       await fetchInventoryAndOrders();
+      const updatedOrders = await api.get<HospitalOrder[]>('/inventory/orders');
+      const matchedOrder = updatedOrders.find(
+        (o) =>
+          o.required_blood_group === batchBloodGroup &&
+          (o.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE') || (o.volunteer_donors && o.volunteer_donors.length > 0))
+      );
+      if (matchedOrder) {
+        setStatusMessage({
+          type: 'success',
+          text: `⚡ Update Response: Batch added ${res.length} packets of ${batchBloodGroup} (${batchComponent})! Matched Request for ${matchedOrder.hospital_name} (previously routed to donors). Stock reserved for dispatch!`,
+        });
+      } else {
+        setStatusMessage({
+          type: 'success',
+          text: `Successfully batch added ${res.length} packets of ${batchBloodGroup} (${batchComponent}) into storage!`,
+        });
+      }
+      setTimeout(() => setStatusMessage(null), 6000);
     } catch (err) {
       alert('Error batch registering blood units: ' + (err instanceof Error ? err.message : err));
     } finally {
@@ -300,13 +423,26 @@ export const BloodBankDashboard: React.FC = () => {
       }));
       const res = await api.post<InventoryUnit[]>('/inventory/batch', { items });
       setShowAddModal(false);
-      const totalBags = multiRows.reduce((sum, r) => sum + r.quantity, 0);
-      setStatusMessage({
-        type: 'success',
-        text: `Successfully registered ${res.length} blood packets across ${multiRows.length} blood type categories!`,
-      });
-      setTimeout(() => setStatusMessage(null), 5000);
+
       await fetchInventoryAndOrders();
+      const updatedOrders = await api.get<HospitalOrder[]>('/inventory/orders');
+      const matchedOrders = updatedOrders.filter(
+        (o) =>
+          items.some((it) => it.blood_group === o.required_blood_group) &&
+          (o.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE') || (o.volunteer_donors && o.volunteer_donors.length > 0))
+      );
+      if (matchedOrders.length > 0) {
+        setStatusMessage({
+          type: 'success',
+          text: `⚡ Update Response: Registered ${res.length} packets! Matched ${matchedOrders.length} active hospital order(s) previously routed to donors. Stock reserved for dispatch!`,
+        });
+      } else {
+        setStatusMessage({
+          type: 'success',
+          text: `Successfully registered ${res.length} blood packets across ${multiRows.length} blood type categories!`,
+        });
+      }
+      setTimeout(() => setStatusMessage(null), 6000);
     } catch (err) {
       alert('Error registering batch rows: ' + (err instanceof Error ? err.message : err));
     } finally {
@@ -323,7 +459,7 @@ export const BloodBankDashboard: React.FC = () => {
         blood_group: 'O+',
         component_type: 'PRBC',
         quantity: 5,
-        volume_ml: 450,
+        volume_ml: 350,
         expiry_days: 42,
       },
     ]);
@@ -339,7 +475,12 @@ export const BloodBankDashboard: React.FC = () => {
         if (r.id === id) {
           const updated = { ...r, [field]: value };
           if (field === 'component_type') {
-            updated.expiry_days = DEFAULT_EXPIRY_BY_COMPONENT[value as BloodComponentType] || 42;
+            const comp = value as BloodComponentType;
+            const spec = STANDARD_COMPONENT_SPEC[comp];
+            if (spec) {
+              updated.volume_ml = spec.volume_ml;
+              updated.expiry_days = spec.expiry_days;
+            }
           }
           return updated;
         }
@@ -351,23 +492,23 @@ export const BloodBankDashboard: React.FC = () => {
   const loadPreset = (presetName: 'DRIVE' | 'TRAUMA' | 'PLATELETS') => {
     if (presetName === 'DRIVE') {
       setMultiRows([
-        { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
-        { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 8, volume_ml: 450, expiry_days: 42 },
-        { id: '3', blood_group: 'A+', component_type: 'PRBC', quantity: 6, volume_ml: 450, expiry_days: 42 },
-        { id: '4', blood_group: 'B+', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
+        { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 4, volume_ml: 350, expiry_days: 42 },
+        { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 8, volume_ml: 350, expiry_days: 42 },
+        { id: '3', blood_group: 'A+', component_type: 'PRBC', quantity: 6, volume_ml: 350, expiry_days: 42 },
+        { id: '4', blood_group: 'B+', component_type: 'PRBC', quantity: 4, volume_ml: 350, expiry_days: 42 },
         { id: '5', blood_group: 'AB+', component_type: 'FFP', quantity: 2, volume_ml: 250, expiry_days: 365 },
       ]);
     } else if (presetName === 'TRAUMA') {
       setMultiRows([
-        { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 10, volume_ml: 450, expiry_days: 42 },
-        { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 10, volume_ml: 450, expiry_days: 42 },
+        { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 10, volume_ml: 350, expiry_days: 42 },
+        { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 10, volume_ml: 350, expiry_days: 42 },
         { id: '3', blood_group: 'AB-', component_type: 'FFP', quantity: 5, volume_ml: 250, expiry_days: 365 },
       ]);
     } else if (presetName === 'PLATELETS') {
       setMultiRows([
-        { id: '1', blood_group: 'O+', component_type: 'PLATELETS', quantity: 4, volume_ml: 300, expiry_days: 5 },
-        { id: '2', blood_group: 'A+', component_type: 'PLATELETS', quantity: 4, volume_ml: 300, expiry_days: 5 },
-        { id: '3', blood_group: 'B+', component_type: 'PLATELETS', quantity: 2, volume_ml: 300, expiry_days: 5 },
+        { id: '1', blood_group: 'O+', component_type: 'PLATELETS', quantity: 4, volume_ml: 250, expiry_days: 5 },
+        { id: '2', blood_group: 'A+', component_type: 'PLATELETS', quantity: 4, volume_ml: 250, expiry_days: 5 },
+        { id: '3', blood_group: 'B+', component_type: 'PLATELETS', quantity: 2, volume_ml: 250, expiry_days: 5 },
       ]);
     }
   };
@@ -544,6 +685,81 @@ export const BloodBankDashboard: React.FC = () => {
 
   return (
     <div>
+      {/* Real-time Broadcast & Availability Alert Banner */}
+      {liveAlert && (
+        <div
+          style={{
+            background:
+              liveAlert.type === 'broadcast'
+                ? 'rgba(239, 68, 68, 0.15)'
+                : liveAlert.type === 'donor_claim'
+                ? 'rgba(16, 185, 129, 0.15)'
+                : 'rgba(6, 182, 212, 0.15)',
+            border: `1px solid ${
+              liveAlert.type === 'broadcast'
+                ? 'rgba(239, 68, 68, 0.4)'
+                : liveAlert.type === 'donor_claim'
+                ? 'rgba(16, 185, 129, 0.4)'
+                : 'rgba(6, 182, 212, 0.4)'
+            }`,
+            borderRadius: '10px',
+            padding: '0.85rem 1.25rem',
+            marginBottom: '1.25rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.85rem',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span
+              style={{
+                display: 'inline-block',
+                width: '10px',
+                height: '10px',
+                borderRadius: '50%',
+                background:
+                  liveAlert.type === 'broadcast'
+                    ? 'var(--crimson-500)'
+                    : liveAlert.type === 'donor_claim'
+                    ? 'var(--emerald-400)'
+                    : 'var(--cyan-400)',
+                boxShadow: `0 0 8px ${
+                  liveAlert.type === 'broadcast'
+                    ? 'var(--crimson-500)'
+                    : liveAlert.type === 'donor_claim'
+                    ? 'var(--emerald-400)'
+                    : 'var(--cyan-400)'
+                }`,
+              }}
+            />
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>{liveAlert.title}</span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 500 }}>({liveAlert.timestamp})</span>
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                {liveAlert.message}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => setLiveAlert(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-dim)',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              padding: '0.2rem',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Toast / Status Alert Banner */}
       {statusMessage && (
         <div
@@ -630,7 +846,7 @@ export const BloodBankDashboard: React.FC = () => {
       )}
 
       {/* Top Stat Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="glass-panel">
           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>READY ON SHELVES</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--emerald-400)', marginTop: '0.25rem' }}>
@@ -642,6 +858,17 @@ export const BloodBankDashboard: React.FC = () => {
           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>RESERVED FOR HOSPITALS</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--amber-400)', marginTop: '0.25rem' }}>
             {lockedCount} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Bags</span>
+          </div>
+        </div>
+
+        <div className="glass-panel">
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>LIVE VOLUNTEER DONORS</div>
+          <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--cyan-400)', marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span>{activeDonors.length}</span>
+            <span className="badge badge-green" style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem' }}>
+              <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', marginRight: '4px' }} />
+              Live Available
+            </span>
           </div>
         </div>
 
@@ -718,7 +945,7 @@ export const BloodBankDashboard: React.FC = () => {
               className={`badge ${deskFilter === 'ALL' ? 'badge-cyan' : ''}`}
               style={{
                 background: deskFilter === 'ALL' ? 'var(--cyan-600, #0891b2)' : 'var(--color-surface)',
-                color: '#fff',
+                color: deskFilter === 'ALL' ? '#fff' : 'var(--text-main)',
                 cursor: 'pointer',
                 border: '1px solid var(--border-subtle)',
                 padding: '0.35rem 0.75rem',
@@ -732,7 +959,7 @@ export const BloodBankDashboard: React.FC = () => {
               className={`badge ${deskFilter === 'ACTION_REQUIRED' ? 'badge-amber' : ''}`}
               style={{
                 background: deskFilter === 'ACTION_REQUIRED' ? 'var(--amber-500, #f59e0b)' : 'var(--color-surface)',
-                color: deskFilter === 'ACTION_REQUIRED' ? '#000' : 'var(--text-muted)',
+                color: deskFilter === 'ACTION_REQUIRED' ? '#000' : 'var(--text-main)',
                 cursor: 'pointer',
                 border: '1px solid var(--border-subtle)',
                 padding: '0.35rem 0.75rem',
@@ -746,7 +973,7 @@ export const BloodBankDashboard: React.FC = () => {
               className={`badge ${deskFilter === 'DISPATCHED' ? 'badge-green' : ''}`}
               style={{
                 background: deskFilter === 'DISPATCHED' ? 'var(--emerald-600, #059669)' : 'var(--color-surface)',
-                color: '#fff',
+                color: deskFilter === 'DISPATCHED' ? '#fff' : 'var(--text-main)',
                 cursor: 'pointer',
                 border: '1px solid var(--border-subtle)',
                 padding: '0.35rem 0.75rem',
@@ -784,10 +1011,10 @@ export const BloodBankDashboard: React.FC = () => {
           </div>
         ) : (
           (() => {
-            const totalOrders = orders.length;
-            const visibleOrders = orders.slice(0, ordersPage * PAGE_SIZE);
-            const hasMoreOrders = totalOrders > visibleOrders.length;
-            const totalOrderPages = Math.ceil(totalOrders / PAGE_SIZE);
+            const totalOrders = filteredAndSortedOrders.length;
+            const startIdx = (ordersPage - 1) * PAGE_SIZE;
+            const visibleOrders = filteredAndSortedOrders.slice(startIdx, startIdx + PAGE_SIZE);
+            const totalOrderPages = Math.ceil(totalOrders / PAGE_SIZE) || 1;
             return (
               <div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -799,7 +1026,7 @@ export const BloodBankDashboard: React.FC = () => {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.3rem' }}>
-                              <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{(ordersPage - 1) * PAGE_SIZE + index + 1}</span>
+                              <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{startIdx + index + 1}</span>
                               <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)' }}>{order.hospital_name}</span>
                               <span className={`badge ${allDispatched ? 'badge-green' : 'badge-amber'}`}>{allDispatched ? 'DISPATCHED' : order.status}</span>
                             </div>
@@ -813,8 +1040,8 @@ export const BloodBankDashboard: React.FC = () => {
                           </div>
                         </div>
                         <div style={{ background: 'var(--color-surface)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.4rem', textTransform: 'uppercase' }}>Blood Bags Allocated From Our Storage:</div>
-                          {order.allocated_units.length === 0 ? (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.4rem', textTransform: 'uppercase' }}>Blood Bags Sourced & Allocated:</div>
+                          {order.allocated_units.length === 0 && (!order.volunteer_donors || order.volunteer_donors.length === 0) ? (
                             <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px dashed rgba(245, 158, 11, 0.4)', borderRadius: '6px', padding: '0.6rem 0.85rem', display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.8rem', color: 'var(--amber-400)' }}>
                               <AlertTriangle size={16} />
                               <span>Storage Depleted for {order.required_blood_group} ({order.component_type}) — Automated Matching Engine routed this demand to <b>Live Volunteer Donors</b> across the city.</span>
@@ -825,16 +1052,73 @@ export const BloodBankDashboard: React.FC = () => {
                                 <div key={u.unit_id} style={{ background: 'var(--color-bg)', padding: '0.4rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.1)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                   <Droplet size={13} color="var(--crimson-500)" />
                                   <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>Bag {u.batch_number}</span>
-                                  <span>({u.blood_group})</span>
+                                  <span>(1 x {u.blood_group})</span>
                                   <span className={`badge ${u.unit_status === 'LOCKED_RESERVE' ? 'badge-amber' : u.unit_status === 'DISPATCHED' ? 'badge-green' : 'badge-red'}`} style={{ fontSize: '0.65rem' }}>
                                     {u.unit_status === 'LOCKED_RESERVE' ? 'Reserved' : u.unit_status === 'DISPATCHED' ? 'Dispatched' : 'Damaged'}
                                   </span>
                                 </div>
                               ))}
+
+                              {(() => {
+                                const donorMap: Record<string, { count: number; blood_group: string; distance_km?: number; estimated_transit_minutes?: number }> = {};
+                                (order.volunteer_donors || []).forEach((vd) => {
+                                  if (!donorMap[vd.donor_id]) {
+                                    donorMap[vd.donor_id] = { count: 0, blood_group: vd.blood_group, distance_km: vd.distance_km, estimated_transit_minutes: vd.estimated_transit_minutes };
+                                  }
+                                  donorMap[vd.donor_id].count += 1;
+                                });
+                                return Object.entries(donorMap).map(([dId, dData]) => (
+                                  <div key={dId} style={{ background: 'rgba(16, 185, 129, 0.08)', padding: '0.4rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(16, 185, 129, 0.3)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <Truck size={13} color="var(--emerald-400)" />
+                                    <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                                      {dData.count} x {dData.blood_group} ({order.component_type})
+                                    </span>
+                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                                      Volunteer Donor {dId.slice(0, 6)}
+                                    </span>
+                                    <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>
+                                      Live Volunteer
+                                    </span>
+                                  </div>
+                                ));
+                              })()}
+                            </div>
+                          )}
+
+                          {order.allocated_units.length > 0 && order.volunteer_donors && order.volunteer_donors.length > 0 && (
+                            <div
+                              style={{
+                                background: 'rgba(6, 182, 212, 0.12)',
+                                border: '1px solid rgba(6, 182, 212, 0.35)',
+                                borderRadius: '6px',
+                                padding: '0.5rem 0.85rem',
+                                fontSize: '0.8rem',
+                                color: 'var(--cyan-300)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                marginTop: '0.5rem',
+                              }}
+                            >
+                              <Sparkles size={15} color="var(--cyan-400)" />
+                              <span>
+                                <b>Update Response:</b> Newly added units in storage matched this demand! Cold-chain stock is reserved for immediate ambulance dispatch alongside volunteer responses.
+                              </span>
                             </div>
                           )}
                         </div>
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                          {!hasReservedUnits && !allDispatched && (order.available_compatible_units?.length ?? 0) > 0 && (
+                            <button
+                              id={`btn-accept-${order.request_id.slice(0, 8)}`}
+                              onClick={() => handleAcceptOrder(order.request_id, true)}
+                              disabled={acceptingId === order.request_id}
+                              className="btn btn-cyan"
+                              style={{ fontSize: '0.85rem', padding: '0.45rem 1rem' }}
+                            >
+                              {acceptingId === order.request_id ? 'Matching Stock...' : 'Fulfill from Newly Added Stock & Dispatch'}
+                            </button>
+                          )}
                           {hasReservedUnits && (
                             <button id={`btn-dispatch-${order.request_id.slice(0, 8)}`} onClick={() => handleDispatchOrder(order.request_id)} disabled={dispatchingId === order.request_id} className="btn btn-cyan" style={{ fontSize: '0.85rem', padding: '0.45rem 1rem' }}>
                               <Truck size={15} />{dispatchingId === order.request_id ? 'Handing Over...' : 'Hand to Ambulance (Dispatch)'}
@@ -850,17 +1134,15 @@ export const BloodBankDashboard: React.FC = () => {
                     );
                   })}
                 </div>
-                {(hasMoreOrders || totalOrders > PAGE_SIZE) && (
+                {totalOrders > PAGE_SIZE && (
                   <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleOrders.length} of {totalOrders} orders</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Showing {startIdx + 1}–{Math.min(ordersPage * PAGE_SIZE, totalOrders)} of {totalOrders} orders
+                    </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      {totalOrders > 10 ? (
-                        Array.from({ length: totalOrderPages }, (_, i) => i + 1).map((p) => (
-                          <button key={p} onClick={() => setOrdersPage(p)} className={`btn ${ordersPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
-                        ))
-                      ) : hasMoreOrders ? (
-                        <button onClick={() => setOrdersPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
-                      ) : null}
+                      {Array.from({ length: totalOrderPages }, (_, i) => i + 1).map((p) => (
+                        <button key={p} onClick={() => setOrdersPage(p)} className={`btn ${ordersPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -887,9 +1169,9 @@ export const BloodBankDashboard: React.FC = () => {
         ) : (
           (() => {
             const totalReqs = activeRequests.length;
-            const visibleReqs = activeRequests.slice(0, requestsPage * PAGE_SIZE);
-            const hasMoreReqs = totalReqs > visibleReqs.length;
-            const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE);
+            const startIdx = (requestsPage - 1) * PAGE_SIZE;
+            const visibleReqs = activeRequests.slice(startIdx, startIdx + PAGE_SIZE);
+            const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE) || 1;
             return (
               <div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -897,13 +1179,13 @@ export const BloodBankDashboard: React.FC = () => {
                     <div key={req.id} style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
-                          <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{(requestsPage - 1) * PAGE_SIZE + index + 1}</span>
+                          <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{startIdx + index + 1}</span>
                           <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
                             {req.hospital_name || 'Hospital'} — {req.units_requested}x {req.required_blood_group} ({req.component_type === 'PRBC' ? 'Red Blood Cells' : req.component_type})
                           </span>
                         </div>
                         <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                          Urgency: <b>{req.calculated_urgency_score?.toFixed(0) ?? 0}/100</b> | Covered: <b>{req.units_covered ?? 0} of {req.units_requested}</b>
+                          Covered: <b>{req.units_covered ?? 0} of {req.units_requested}</b>
                         </div>
                       </div>
                       <span className={`badge ${
@@ -921,17 +1203,15 @@ export const BloodBankDashboard: React.FC = () => {
                     </div>
                   ))}
                 </div>
-                {(hasMoreReqs || totalReqs > PAGE_SIZE) && (
+                {totalReqs > PAGE_SIZE && (
                   <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleReqs.length} of {totalReqs} requests</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Showing {startIdx + 1}–{Math.min(requestsPage * PAGE_SIZE, totalReqs)} of {totalReqs} requests
+                    </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      {totalReqs > 10 ? (
-                        Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
-                          <button key={p} onClick={() => setRequestsPage(p)} className={`btn ${requestsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
-                        ))
-                      ) : hasMoreReqs ? (
-                        <button onClick={() => setRequestsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
-                      ) : null}
+                      {Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
+                        <button key={p} onClick={() => setRequestsPage(p)} className={`btn ${requestsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -958,9 +1238,9 @@ export const BloodBankDashboard: React.FC = () => {
         ) : (
           (() => {
             const totalDonors = displayedDonors.length;
-            const visibleDonors = displayedDonors.slice(0, donorsPage * PAGE_SIZE);
-            const hasMoreDonors = totalDonors > visibleDonors.length;
-            const totalDonorPages = Math.ceil(totalDonors / PAGE_SIZE);
+            const startIdx = (donorsPage - 1) * PAGE_SIZE;
+            const visibleDonors = displayedDonors.slice(startIdx, startIdx + PAGE_SIZE);
+            const totalDonorPages = Math.ceil(totalDonors / PAGE_SIZE) || 1;
             return (
               <div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -968,7 +1248,7 @@ export const BloodBankDashboard: React.FC = () => {
                     <div key={donor.id} style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
-                          <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{(donorsPage - 1) * PAGE_SIZE + index + 1}</span>
+                          <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{startIdx + index + 1}</span>
                           <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
                             {donor.blood_group} Volunteer (Reliability: {Math.round(donor.reliability_score * 100)}%)
                           </span>
@@ -991,17 +1271,15 @@ export const BloodBankDashboard: React.FC = () => {
                     </div>
                   ))}
                 </div>
-                {(hasMoreDonors || totalDonors > PAGE_SIZE) && (
+                {totalDonors > PAGE_SIZE && (
                   <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleDonors.length} of {totalDonors} donors</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Showing {startIdx + 1}–{Math.min(donorsPage * PAGE_SIZE, totalDonors)} of {totalDonors} donors
+                    </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      {totalDonors > 10 ? (
-                        Array.from({ length: totalDonorPages }, (_, i) => i + 1).map((p) => (
-                          <button key={p} onClick={() => setDonorsPage(p)} className={`btn ${donorsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
-                        ))
-                      ) : hasMoreDonors ? (
-                        <button onClick={() => setDonorsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
-                      ) : null}
+                      {Array.from({ length: totalDonorPages }, (_, i) => i + 1).map((p) => (
+                        <button key={p} onClick={() => setDonorsPage(p)} className={`btn ${donorsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -1057,16 +1335,16 @@ export const BloodBankDashboard: React.FC = () => {
             <tbody>
               {(() => {
                 const totalUnits = units.length;
-                const visibleUnits = unitsPage === -1 ? units : units.slice(0, unitsPage * PAGE_SIZE);
-                const hasMoreUnits = unitsPage !== -1 && totalUnits > visibleUnits.length;
-                const totalUnitPages = Math.ceil(totalUnits / PAGE_SIZE);
+                const startIdx = unitsPage === -1 ? 0 : (unitsPage - 1) * PAGE_SIZE;
+                const visibleUnits = unitsPage === -1 ? units : units.slice(startIdx, startIdx + PAGE_SIZE);
+                const totalUnitPages = Math.ceil(totalUnits / PAGE_SIZE) || 1;
                 return (
                   <>
                     {visibleUnits.map((unit, index) => {
                       const isLocked = unit.status === 'LOCKED_RESERVE';
                       return (
                         <tr key={unit.id} id={`unit-row-${unit.batch_number.toLowerCase()}`} style={{ borderBottom: '1px solid var(--color-border)', background: isLocked ? 'rgba(217, 119, 6, 0.06)' : 'transparent' }}>
-                          <td style={{ padding: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-dim)', fontSize: '0.78rem' }}>#{(unitsPage === -1 ? 0 : (unitsPage - 1) * PAGE_SIZE) + index + 1}</td>
+                          <td style={{ padding: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-dim)', fontSize: '0.78rem' }}>#{startIdx + index + 1}</td>
                           <td style={{ padding: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{unit.batch_number}</td>
                           <td style={{ padding: '0.75rem', fontWeight: 700, color: 'var(--text-main)' }}>{unit.blood_group}</td>
                           <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.component_type === 'PRBC' ? 'Red Blood Cells' : unit.component_type}</td>
@@ -1094,22 +1372,18 @@ export const BloodBankDashboard: React.FC = () => {
                         </tr>
                       );
                     })}
-                    {(hasMoreUnits || totalUnits > PAGE_SIZE) && (
+                    {totalUnits > PAGE_SIZE && (
                       <tr>
                         <td colSpan={8} style={{ padding: '0.85rem', textAlign: 'center' }}>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleUnits.length} of {totalUnits} bags</span>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                              Showing {unitsPage === -1 ? `All ${totalUnits}` : `${startIdx + 1}–${Math.min(unitsPage * PAGE_SIZE, totalUnits)}`} of {totalUnits} bags
+                            </span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                              {totalUnits > 10 ? (
-                                <>
-                                  {Array.from({ length: totalUnitPages }, (_, i) => i + 1).map((p) => (
-                                    <button key={p} onClick={() => setUnitsPage(p)} className={`btn ${unitsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
-                                  ))}
-                                  <button onClick={() => setUnitsPage(-1)} className={`btn ${unitsPage === -1 ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }}>All</button>
-                                </>
-                              ) : hasMoreUnits ? (
-                                <button onClick={() => setUnitsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
-                              ) : null}
+                              {Array.from({ length: totalUnitPages }, (_, i) => i + 1).map((p) => (
+                                <button key={p} onClick={() => setUnitsPage(p)} className={`btn ${unitsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                              ))}
+                              <button onClick={() => setUnitsPage(unitsPage === -1 ? 1 : -1)} className={`btn ${unitsPage === -1 ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }}>{unitsPage === -1 ? 'Paginate' : 'All'}</button>
                             </div>
                           </div>
                         </td>
@@ -1139,7 +1413,15 @@ export const BloodBankDashboard: React.FC = () => {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             {['ALL', 'PRBC', 'PLATELETS', 'FFP'].map((comp) => (
-              <button key={comp} onClick={() => setComponentFilter(comp)} className={`btn ${componentFilter === comp ? 'btn-primary' : 'btn-secondary'}`} style={{ fontSize: '0.75rem', padding: '0.3rem 0.75rem' }}>
+              <button
+                key={comp}
+                onClick={() => {
+                  setComponentFilter(comp);
+                  setForecastPage(1);
+                }}
+                className={`btn ${componentFilter === comp ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ fontSize: '0.75rem', padding: '0.3rem 0.75rem' }}
+              >
                 {comp === 'ALL' ? 'All Components' : comp}
               </button>
             ))}
@@ -1178,72 +1460,117 @@ export const BloodBankDashboard: React.FC = () => {
             <RefreshCw size={24} className="spin" style={{ marginBottom: '0.5rem', color: 'var(--text-dim)' }} />
             <div>Generating ML demand forecasts and coverage projections...</div>
           </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
-                  <th style={{ padding: '0.65rem' }}>SERIES</th>
-                  <th style={{ padding: '0.65rem' }}>ON-SHELF READY</th>
-                  <th style={{ padding: '0.65rem' }}>EST. DEMAND (D+1)</th>
-                  <th style={{ padding: '0.65rem' }}>DAYS COVERAGE</th>
-                  <th style={{ padding: '0.65rem' }}>RISK SCORES</th>
-                  <th style={{ padding: '0.65rem' }}>OPERATIONAL STATUS</th>
-                  <th style={{ padding: '0.65rem' }}>AI ACTION ADVISORY</th>
-                </tr>
-              </thead>
-              <tbody>
-                {forecasts
-                  .filter((f) => componentFilter === 'ALL' || f.component_type === componentFilter)
-                  .map((f) => {
-                    const isCritical = f.operational_status === 'Critical Shortage';
-                    const isHighShortage = f.operational_status === 'High Shortage Risk';
-                    const isWastage = f.operational_status === 'High Wastage Risk';
-                    const isSpike = f.operational_status === 'Demand Spike Risk';
-                    const statusBadgeClass = isCritical ? 'badge-red' : isHighShortage ? 'badge-amber' : isWastage ? 'badge-purple' : isSpike ? 'badge-amber' : f.operational_status === 'Monitor Inventory' ? 'badge-cyan' : 'badge-green';
-                    return (
-                      <tr key={`${f.blood_group}-${f.component_type}`} style={{ borderBottom: '1px solid var(--border-subtle)', background: isCritical ? 'rgba(239, 68, 68, 0.04)' : isWastage ? 'rgba(126, 34, 206, 0.04)' : 'transparent' }}>
-                        <td style={{ padding: '0.65rem' }}>
-                          <span style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '0.95rem' }}>{f.blood_group}</span>{' '}
-                          <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>({f.component_type})</span>
-                        </td>
-                        <td style={{ padding: '0.65rem', fontWeight: 700 }}>
-                          <span style={{ color: f.closing_inventory === 0 ? 'var(--crimson-500)' : 'var(--text-main)' }}>{Math.round(f.closing_inventory)}</span>{' '}
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>units</span>
-                        </td>
-                        <td style={{ padding: '0.65rem' }}>
-                          <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{Math.ceil(f.predicted_demand)}{' '}<span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>units</span></div>
-                          {f.is_spike_predicted && (
-                            <div style={{ fontSize: '0.7rem', color: 'var(--amber-500)', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
-                              <TrendingUp size={11} /> Surge Headroom: {Math.ceil(f.spike_headroom_demand)}u
+        ) : (() => {
+          const filteredForecasts = forecasts.filter((f) => componentFilter === 'ALL' || f.component_type === componentFilter);
+          const totalForecastPages = Math.max(1, Math.ceil(filteredForecasts.length / FORECAST_PAGE_SIZE));
+          const currentForecastPage = Math.min(forecastPage, totalForecastPages);
+          const startIdx = (currentForecastPage - 1) * FORECAST_PAGE_SIZE;
+          const displayedForecasts = filteredForecasts.slice(startIdx, startIdx + FORECAST_PAGE_SIZE);
+
+          return (
+            <div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
+                      <th style={{ padding: '0.65rem' }}>SERIES</th>
+                      <th style={{ padding: '0.65rem' }}>ON-SHELF READY</th>
+                      <th style={{ padding: '0.65rem' }}>EST. DEMAND (D+1)</th>
+                      <th style={{ padding: '0.65rem' }}>DAYS COVERAGE</th>
+                      <th style={{ padding: '0.65rem' }}>RISK SCORES</th>
+                      <th style={{ padding: '0.65rem' }}>OPERATIONAL STATUS</th>
+                      <th style={{ padding: '0.65rem' }}>AI ACTION ADVISORY</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedForecasts.map((f) => {
+                      const isCritical = f.operational_status === 'Critical Shortage';
+                      const isHighShortage = f.operational_status === 'High Shortage Risk';
+                      const isWastage = f.operational_status === 'High Wastage Risk';
+                      const isSpike = f.operational_status === 'Demand Spike Risk';
+                      const statusBadgeClass = isCritical ? 'badge-red' : isHighShortage ? 'badge-amber' : isWastage ? 'badge-purple' : isSpike ? 'badge-amber' : f.operational_status === 'Monitor Inventory' ? 'badge-cyan' : 'badge-green';
+                      return (
+                        <tr key={`${f.blood_group}-${f.component_type}`} style={{ borderBottom: '1px solid var(--border-subtle)', background: isCritical ? 'rgba(239, 68, 68, 0.04)' : isWastage ? 'rgba(126, 34, 206, 0.04)' : 'transparent' }}>
+                          <td style={{ padding: '0.65rem' }}>
+                            <span style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '0.95rem' }}>{f.blood_group}</span>{' '}
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>({f.component_type})</span>
+                          </td>
+                          <td style={{ padding: '0.65rem', fontWeight: 700 }}>
+                            <span style={{ color: f.closing_inventory === 0 ? 'var(--crimson-500)' : 'var(--text-main)' }}>{Math.round(f.closing_inventory)}</span>{' '}
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>units</span>
+                          </td>
+                          <td style={{ padding: '0.65rem' }}>
+                            <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{Math.ceil(f.predicted_demand)}{' '}<span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>units</span></div>
+                            {f.is_spike_predicted && (
+                              <div style={{ fontSize: '0.7rem', color: 'var(--amber-500)', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                                <TrendingUp size={11} /> Surge Headroom: {Math.ceil(f.spike_headroom_demand)}u
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.65rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <div style={{ width: '45px', height: '6px', background: 'var(--border-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                                <div style={{ width: `${Math.min((f.predicted_coverage_days / 5) * 100, 100)}%`, height: '100%', background: f.predicted_coverage_days < 2 ? 'var(--crimson-500)' : f.predicted_coverage_days < 5 ? 'var(--amber-500)' : 'var(--emerald-500)' }} />
+                              </div>
+                              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: f.predicted_coverage_days < 2 ? 'var(--crimson-500)' : f.predicted_coverage_days < 5 ? 'var(--amber-500)' : 'var(--emerald-500)' }}>
+                                {f.predicted_coverage_days >= 99 ? '> 99d' : `${f.predicted_coverage_days.toFixed(1)}d`}
+                              </span>
                             </div>
-                          )}
-                        </td>
-                        <td style={{ padding: '0.65rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <div style={{ width: '45px', height: '6px', background: 'var(--border-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
-                              <div style={{ width: `${Math.min((f.predicted_coverage_days / 5) * 100, 100)}%`, height: '100%', background: f.predicted_coverage_days < 2 ? 'var(--crimson-500)' : f.predicted_coverage_days < 5 ? 'var(--amber-500)' : 'var(--emerald-500)' }} />
-                            </div>
-                            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: f.predicted_coverage_days < 2 ? 'var(--crimson-500)' : f.predicted_coverage_days < 5 ? 'var(--amber-500)' : 'var(--emerald-500)' }}>
-                              {f.predicted_coverage_days >= 99 ? '> 99d' : `${f.predicted_coverage_days.toFixed(1)}d`}
-                            </span>
-                          </div>
-                        </td>
-                        <td style={{ padding: '0.65rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          <div>Spike: <b>{Math.round(f.spike_risk_score * 100)}%</b></div>
-                          <div>Wastage: <b style={{ color: f.wastage_risk_score >= 0.75 ? 'var(--crimson-500)' : 'inherit' }}>{Math.round(f.wastage_risk_score * 100)}%</b></div>
-                        </td>
-                        <td style={{ padding: '0.65rem' }}>
-                          <span className={`badge ${statusBadgeClass}`} style={{ fontSize: '0.72rem' }}>{f.operational_status}</span>
-                        </td>
-                        <td style={{ padding: '0.65rem', fontSize: '0.78rem', color: 'var(--text-main)', maxWidth: '280px' }}>{f.recommended_action}</td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                          </td>
+                          <td style={{ padding: '0.65rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            <div>Spike: <b>{Math.round(f.spike_risk_score * 100)}%</b></div>
+                            <div>Wastage: <b style={{ color: f.wastage_risk_score >= 0.75 ? 'var(--crimson-500)' : 'inherit' }}>{Math.round(f.wastage_risk_score * 100)}%</b></div>
+                          </td>
+                          <td style={{ padding: '0.65rem' }}>
+                            <span className={`badge ${statusBadgeClass}`} style={{ fontSize: '0.72rem' }}>{f.operational_status}</span>
+                          </td>
+                          <td style={{ padding: '0.65rem', fontSize: '0.78rem', color: 'var(--text-main)', maxWidth: '280px' }}>{f.recommended_action}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Forecast Pagination Bar */}
+              {totalForecastPages > 1 && (
+                <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', padding: '0.5rem 0.25rem', borderTop: '1px solid var(--border-subtle)' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Showing <b>{startIdx + 1}–{Math.min(startIdx + FORECAST_PAGE_SIZE, filteredForecasts.length)}</b> of <b>{filteredForecasts.length}</b> series (Page {currentForecastPage} of {totalForecastPages})
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <button
+                      onClick={() => setForecastPage((p) => Math.max(1, p - 1))}
+                      disabled={currentForecastPage === 1}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.78rem', padding: '0.25rem 0.6rem', opacity: currentForecastPage === 1 ? 0.5 : 1, cursor: currentForecastPage === 1 ? 'not-allowed' : 'pointer' }}
+                    >
+                      &larr; Prev
+                    </button>
+                    {Array.from({ length: totalForecastPages }, (_, i) => i + 1).map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setForecastPage(p)}
+                        className={`btn ${currentForecastPage === p ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ minWidth: '32px', padding: '0.25rem 0.55rem', fontSize: '0.78rem', fontWeight: currentForecastPage === p ? 700 : 500 }}
+                      >
+                        Page {p}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setForecastPage((p) => Math.min(totalForecastPages, p + 1))}
+                      disabled={currentForecastPage === totalForecastPages}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.78rem', padding: '0.25rem 0.6rem', opacity: currentForecastPage === totalForecastPages ? 0.5 : 1, cursor: currentForecastPage === totalForecastPages ? 'not-allowed' : 'pointer' }}
+                    >
+                      Next &rarr;
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Modern Batch & Single Blood Packets Modal */}
@@ -1464,19 +1791,23 @@ export const BloodBankDashboard: React.FC = () => {
                       onChange={(e) => {
                         const comp = e.target.value as BloodComponentType;
                         setBatchComponent(comp);
-                        setBatchExpiryDays(DEFAULT_EXPIRY_BY_COMPONENT[comp] || 42);
+                        const spec = STANDARD_COMPONENT_SPEC[comp];
+                        if (spec) {
+                          setBatchVolume(spec.volume_ml);
+                          setBatchExpiryDays(spec.expiry_days);
+                        }
                       }}
                     >
-                      <option value="PRBC">PRBC (Packed Red Blood Cells)</option>
-                      <option value="WHOLE_BLOOD">Whole Blood</option>
-                      <option value="PLATELETS">Platelets</option>
-                      <option value="FFP">Fresh Frozen Plasma (FFP)</option>
-                      <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                      <option value="PRBC">PRBC (Packed Red Blood Cells - 350 mL)</option>
+                      <option value="WHOLE_BLOOD">Whole Blood (450 mL)</option>
+                      <option value="PLATELETS">Platelets (250 mL)</option>
+                      <option value="FFP">Fresh Frozen Plasma - FFP (250 mL)</option>
+                      <option value="CRYOPRECIPITATE">Cryoprecipitate (20 mL)</option>
                     </select>
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '0.75rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '0.75rem' }}>
                   <div>
                     <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Batch Code Prefix</label>
                     <input
@@ -1489,18 +1820,10 @@ export const BloodBankDashboard: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Volume (mL)</label>
-                    <input
-                      type="number"
-                      min="50"
-                      max="1000"
-                      className="input-field"
-                      value={batchVolume}
-                      onChange={(e) => setBatchVolume(Number(e.target.value))}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Shelf Life (Days)</label>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Shelf Life (Days)</label>
+                      <span className="badge" style={{ fontSize: '0.68rem', padding: '0.1rem 0.35rem', background: 'var(--color-surface)' }}>Auto</span>
+                    </div>
                     <input
                       type="number"
                       min="1"
@@ -1586,9 +1909,8 @@ export const BloodBankDashboard: React.FC = () => {
                       <tr style={{ background: 'var(--color-bg)', borderBottom: '1px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
                         <th style={{ padding: '0.5rem 0.6rem' }}>BLOOD GROUP</th>
                         <th style={{ padding: '0.5rem 0.6rem' }}>COMPONENT</th>
-                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>QTY</th>
-                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>VOL (mL)</th>
-                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>SHELF (d)</th>
+                        <th style={{ padding: '0.5rem 0.6rem', width: '100px' }}>QTY</th>
+                        <th style={{ padding: '0.5rem 0.6rem', width: '100px' }}>SHELF (d)</th>
                         <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', width: '45px' }}>DEL</th>
                       </tr>
                     </thead>
@@ -1614,11 +1936,11 @@ export const BloodBankDashboard: React.FC = () => {
                               onChange={(e) => updateMultiRow(row.id, 'component_type', e.target.value as BloodComponentType)}
                               style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
                             >
-                              <option value="PRBC">PRBC</option>
-                              <option value="WHOLE_BLOOD">Whole Blood</option>
-                              <option value="PLATELETS">Platelets</option>
-                              <option value="FFP">FFP</option>
-                              <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                              <option value="PRBC">PRBC (350 mL)</option>
+                              <option value="WHOLE_BLOOD">Whole Blood (450 mL)</option>
+                              <option value="PLATELETS">Platelets (250 mL)</option>
+                              <option value="FFP">FFP (250 mL)</option>
+                              <option value="CRYOPRECIPITATE">Cryoprecipitate (20 mL)</option>
                             </select>
                           </td>
                           <td style={{ padding: '0.4rem 0.6rem' }}>
@@ -1630,17 +1952,6 @@ export const BloodBankDashboard: React.FC = () => {
                               value={row.quantity}
                               onChange={(e) => updateMultiRow(row.id, 'quantity', Math.max(1, Number(e.target.value) || 1))}
                               style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
-                            />
-                          </td>
-                          <td style={{ padding: '0.4rem 0.6rem' }}>
-                            <input
-                              type="number"
-                              min="50"
-                              max="1000"
-                              className="input-field"
-                              value={row.volume_ml}
-                              onChange={(e) => updateMultiRow(row.id, 'volume_ml', Number(e.target.value) || 450)}
-                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
                             />
                           </td>
                           <td style={{ padding: '0.4rem 0.6rem' }}>
@@ -1744,40 +2055,34 @@ export const BloodBankDashboard: React.FC = () => {
                       onChange={(e) => {
                         const comp = e.target.value as BloodComponentType;
                         setNewComponent(comp);
-                        setNewExpiryDays(DEFAULT_EXPIRY_BY_COMPONENT[comp] || 42);
+                        const spec = STANDARD_COMPONENT_SPEC[comp];
+                        if (spec) {
+                          setNewVolume(spec.volume_ml);
+                          setNewExpiryDays(spec.expiry_days);
+                        }
                       }}
                     >
-                      <option value="PRBC">PRBC</option>
-                      <option value="WHOLE_BLOOD">Whole Blood</option>
-                      <option value="PLATELETS">Platelets</option>
-                      <option value="FFP">FFP</option>
-                      <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                      <option value="PRBC">PRBC (Packed Red Blood Cells - 350 mL)</option>
+                      <option value="WHOLE_BLOOD">Whole Blood (450 mL)</option>
+                      <option value="PLATELETS">Platelets (250 mL)</option>
+                      <option value="FFP">Fresh Frozen Plasma - FFP (250 mL)</option>
+                      <option value="CRYOPRECIPITATE">Cryoprecipitate (20 mL)</option>
                     </select>
                   </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                  <div>
-                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Volume (mL)</label>
-                    <input
-                      type="number"
-                      min="50"
-                      max="1000"
-                      className="input-field"
-                      value={newVolume}
-                      onChange={(e) => setNewVolume(Number(e.target.value))}
-                    />
-                  </div>
-                  <div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Shelf Life (Days)</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="365"
-                      className="input-field"
-                      value={newExpiryDays}
-                      onChange={(e) => setNewExpiryDays(Number(e.target.value))}
-                    />
+                    <span className="badge" style={{ fontSize: '0.68rem', padding: '0.1rem 0.35rem', background: 'var(--color-surface)' }}>Auto</span>
                   </div>
+                  <input
+                    type="number"
+                    min="1"
+                    max="365"
+                    className="input-field"
+                    value={newExpiryDays}
+                    onChange={(e) => setNewExpiryDays(Number(e.target.value))}
+                  />
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem' }}>

@@ -37,15 +37,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
-        # Exclude exempt paths or testing bypass
+        # Exclude exempt paths or testing/development bypass (unless explicitly tested with X-Testing: false)
         path = request.url.path
-        if (
-            path in EXEMPT_PATHS
-            or request.headers.get("X-Testing") == "true"
-            or getattr(settings, "ENVIRONMENT", "") == "testing"
-            or getattr(settings, "DISABLE_RATE_LIMIT", False)
-        ):
+        if path in EXEMPT_PATHS:
             return await call_next(request)
+
+        is_explicit_test = request.headers.get("X-Testing") == "false"
+        if not is_explicit_test:
+            if (
+                request.headers.get("X-Testing") == "true"
+                or getattr(settings, "ENVIRONMENT", "").lower() in ("development", "dev", "test", "testing")
+                or getattr(settings, "DISABLE_RATE_LIMIT", False)
+            ):
+                return await call_next(request)
 
         # Determine client identifier (authenticated user ID from Authorization header hash or client IP)
         client_ip = request.client.host if request.client else "unknown"

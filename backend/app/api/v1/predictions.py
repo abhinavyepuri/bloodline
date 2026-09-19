@@ -26,6 +26,7 @@ router = APIRouter()
 
 
 @router.get("/summary", response_model=PredictionSummaryOut)
+@router.get("/forecasts/summary", response_model=PredictionSummaryOut, include_in_schema=False)
 async def get_prediction_summary(
     blood_bank_id: Optional[str] = Query(None, description="Optional facility filter"),
     db: AsyncSession = Depends(get_db),
@@ -69,6 +70,7 @@ async def get_prediction_summary(
 
 
 @router.get("/forecast", response_model=List[SeriesForecastOut])
+@router.get("/forecasts", response_model=List[SeriesForecastOut], include_in_schema=False)
 async def get_series_forecast(
     blood_bank_id: Optional[str] = Query(None, description="Filter by facility ID"),
     blood_group: Optional[str] = Query(None, description="Filter by blood group e.g. O+, A-"),

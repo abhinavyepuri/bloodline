@@ -12,6 +12,7 @@ api_router.include_router(hospitals.router, prefix="/hospitals", tags=["Hospital
 api_router.include_router(audit.router, prefix="/audit", tags=["Explainability & Audit Logs"])
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin & System Administration"])
 api_router.include_router(predictions.router, prefix="/predictions", tags=["ML Predictions & Decision Support"])
+api_router.include_router(predictions.router, prefix="/ml", tags=["ML Predictions & Decision Support (Legacy Alias)"])
 
 
 @api_router.get("/health", tags=["Health"])

@@ -273,30 +273,6 @@ class ConcurrencyLockManager:
         values = await self.redis.mget(keys)
         return [i for i, v in enumerate(values) if v == donor_id]
 
-    async def claim_unit_slots(
-        self,
-        request_id: str,
-        donor_id: str,
-        max_units: int,
-        count: int = 1,
-        ttl_seconds: int = 86400,
-    ) -> List[int]:
-        """
-        Atomically claim up to ``count`` free unit slots for this donor.
-        Returns a list of claimed slot indices.
-        """
-        if max_units <= 0 or count <= 0:
-            return []
-
-        claimed: List[int] = []
-        for index in range(max(max_units, 1)):
-            if len(claimed) >= count:
-                break
-            key = self._slot_key(request_id, index)
-            if await self.redis.set(key, donor_id, nx=True, ex=ttl_seconds):
-                claimed.append(index)
-        return claimed
-
     async def donor_slot(self, request_id: str, donor_id: str, max_units: int) -> Optional[int]:
         """The first slot index this donor already holds on this request, if any."""
         slots = await self.donor_slots(request_id, donor_id, max_units)
@@ -313,38 +289,6 @@ class ConcurrencyLockManager:
     async def claimed_count(self, request_id: str, max_units: int) -> int:
         """Number of unit slots claimed so far."""
         return len(await self.claimed_slots(request_id, max_units))
-
-    async def claim_unit_slots(
-        self,
-        request_id: str,
-        donor_id: str,
-        max_units: int,
-        count: int = 1,
-        ttl_seconds: int = 86400,
-    ) -> List[int]:
-        """
-        Atomically claim up to `count` free unit slots for this donor.
-        Returns list of claimed slot indices.
-        """
-        if max_units <= 0 or count <= 0:
-            return []
-
-        claimed = []
-        for index in range(max_units):
-            key = self._slot_key(request_id, index)
-            if await self.redis.set(key, donor_id, nx=True, ex=ttl_seconds):
-                claimed.append(index)
-                if len(claimed) >= count:
-                    break
-        return claimed
-
-    async def donor_slots(self, request_id: str, donor_id: str, max_units: int) -> List[int]:
-        """All slot indices this donor already holds on this request."""
-        slots = []
-        for index in range(max(max_units, 1)):
-            if await self.redis.get(self._slot_key(request_id, index)) == donor_id:
-                slots.append(index)
-        return slots
 
     async def release_donor_slots(self, request_id: str, donor_id: str, max_units: int) -> int:
         """Release all slots held by this donor."""

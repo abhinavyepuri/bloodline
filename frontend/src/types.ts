@@ -136,6 +136,21 @@ export interface DonorHealthReport {
   created_at: string;
 }
 
+export interface DonationHistoryItem {
+  id: string;
+  request_id?: string;
+  request_code?: string;
+  hospital_name?: string;
+  hospital_address?: string;
+  component_type: BloodComponentType | string;
+  blood_group: string;
+  units: number;
+  status: string;
+  donated_at: string;
+  distance_km?: number;
+  notes?: string;
+}
+
 export interface Donor {
   id: string;
   user_id: string;
@@ -143,6 +158,13 @@ export interface Donor {
   date_of_birth: string;
   weight_kg: number;
   last_donation_date?: string;
+  next_eligible_date?: string;
+  days_until_eligible?: number;
+  interval_days_since_last_donation?: number;
+  account_donation_status?: string;
+  cooling_period_active?: boolean;
+  is_fit_to_donate?: boolean;
+  clinical_eligibility_reason?: string;
   is_available: boolean;
   reliability_score: number;
   total_successful_donations: number;

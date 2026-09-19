@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { api } from '../lib/api';
-import { BloodRequest, Donor, DonorHealthReport, DonorRespondResult, DonorTelemetry } from '../types';
+import { BloodRequest, Donor, DonorHealthReport, DonorRespondResult, DonorTelemetry, DonationHistoryItem } from '../types';
 import {
   UserCheck,
   MapPin,
@@ -26,6 +26,9 @@ import {
   Building2,
   Clock,
   Info,
+  Award,
+  CheckCircle2,
+  Droplet,
 } from 'lucide-react';
 
 export const DonorDashboard: React.FC = () => {
@@ -34,15 +37,14 @@ export const DonorDashboard: React.FC = () => {
 
   const [donorProfile, setDonorProfile] = useState<Donor | null>(null);
   const [activeAlerts, setActiveAlerts] = useState<BloodRequest[]>([]);
+  const [donationHistory, setDonationHistory] = useState<DonationHistoryItem[]>([]);
+  const [fulfilledNotification, setFulfilledNotification] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [responseStatus, setResponseStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [lastResult, setLastResult] = useState<DonorRespondResult | null>(null);
   /** Alerts the donor has pushed aside, so the full-screen panel is not permanent. */
   const [dismissedAlertIds, setDismissedAlertIds] = useState<string[]>([]);
 
-  // Pagination for alerts
-  const PAGE_SIZE = 5;
-  const [alertsPage, setAlertsPage] = useState(1);
 
   // GPS & Telemetry Tracking State
   const [gpsSyncing, setGpsSyncing] = useState(false);
@@ -69,14 +71,16 @@ export const DonorDashboard: React.FC = () => {
 
   const fetchDonorData = useCallback(async () => {
     try {
-      const [profile, alerts, report] = await Promise.all([
+      const [profile, alerts, report, history] = await Promise.all([
         api.get<Donor>('/donors/me'),
         api.get<BloodRequest[]>('/donors/requests/active'),
         api.get<DonorHealthReport>('/donors/me/health-report'),
+        api.get<DonationHistoryItem[]>('/donors/me/history').catch(() => [] as DonationHistoryItem[]),
       ]);
       setDonorProfile(profile);
       setActiveAlerts(alerts);
       setHealthReport(report);
+      setDonationHistory(history);
       setLoadError(null);
 
       // Drop dismissals for alerts that no longer exist, so a re-issued alert reopens.
@@ -94,20 +98,30 @@ export const DonorDashboard: React.FC = () => {
   }, [fetchDonorData, user]);
 
   useEffect(() => {
-    if (
-      lastEvent &&
-      [
-        'EMERGENCY_DISPATCH_ALERT',
-        'REQUEST_CREATED',
-        'DONOR_CLAIM_SUCCESS',
-        'DONOR_STAND_DOWN',
-        'DONOR_AVAILABILITY_CHANGED',
-        'DONOR_HEALTH_EVALUATED',
-        'RE_PLANNING_TRIGGERED',
-        'SYSTEM_RESET',
-      ].includes(lastEvent.type)
-    ) {
-      fetchDonorData();
+    if (lastEvent) {
+      if (lastEvent.type === 'REQUEST_FULFILLED') {
+        setFulfilledNotification(
+          (lastEvent.message as string) || '🎉 Blood Donation Fulfilled & Received! The hospital confirmed that your blood was received and the request has been fulfilled. Thank you for your heroism!'
+        );
+        setLastResult(null);
+      }
+      if (
+        [
+          'EMERGENCY_DISPATCH_ALERT',
+          'REQUEST_CREATED',
+          'REQUEST_UPDATED',
+          'REQUEST_FULFILLED',
+          'REQUEST_CANCELLED',
+          'DONOR_CLAIM_SUCCESS',
+          'DONOR_STAND_DOWN',
+          'DONOR_AVAILABILITY_CHANGED',
+          'DONOR_HEALTH_EVALUATED',
+          'RE_PLANNING_TRIGGERED',
+          'SYSTEM_RESET',
+        ].includes(lastEvent.type)
+      ) {
+        fetchDonorData();
+      }
     }
   }, [lastEvent, fetchDonorData]);
 
@@ -327,192 +341,448 @@ export const DonorDashboard: React.FC = () => {
     setDismissedAlertIds((prev) => [...prev, requestId]);
   };
 
-  const visibleAlerts = activeAlerts.filter(
+  const matchingAlerts = activeAlerts.filter(
+    (alert) => !donorProfile || alert.required_blood_group === donorProfile.blood_group
+  );
+
+  const visibleAlerts = matchingAlerts.filter(
     (alert) => !dismissedAlertIds.includes(alert.id)
   );
 
-  const isEligible = healthReport?.eligibility_status === 'ELIGIBLE';
+  const activeCommitments = donationHistory.filter(
+    (item) => item.status !== 'COMPLETED' && item.status !== 'CANCELLED' && item.status !== 'TIMED_OUT' && item.status !== 'RE_OPTIMIZED'
+  );
+  const completedHistory = donationHistory.filter(
+    (item) => item.status === 'COMPLETED'
+  );
+
+  // Clinical Clearance & Cooling Interval calculations (Standard Whole Blood recovery: 56 days)
+  const lastDonation = donorProfile?.last_donation_date ? new Date(donorProfile.last_donation_date) : null;
+  const today = new Date();
+  const daysSinceLast = lastDonation ? Math.max(0, Math.floor((today.getTime() - lastDonation.getTime()) / (1000 * 3600 * 24))) : null;
+  const COOLDOWN_DAYS = 56;
+  const isCoolingActive = Boolean(
+    donorProfile?.cooling_period_active || (daysSinceLast !== null && daysSinceLast < COOLDOWN_DAYS)
+  );
+  const daysUntilEligible = donorProfile?.days_until_eligible ?? (isCoolingActive && daysSinceLast !== null ? COOLDOWN_DAYS - daysSinceLast : 0);
+  const nextEligibleDate = donorProfile?.next_eligible_date || (lastDonation ? new Date(lastDonation.getTime() + COOLDOWN_DAYS * 24 * 3600 * 1000).toISOString().split('T')[0] : null);
+
+  const isHealthEligible = healthReport?.eligibility_status === 'ELIGIBLE';
+  const isEligible = isHealthEligible;
+  const isPermanentlyDeferred = healthReport?.eligibility_status === 'PERMANENTLY_DEFERRED';
   const isDeferred = Boolean(healthReport && healthReport.eligibility_status !== 'ELIGIBLE');
+  const isFitToDonate = isHealthEligible && !isCoolingActive;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 350px) 1fr', gap: '1.5rem' }}>
-      {/* ── Left Column: Donor Profile & Readiness ── */}
-      <div className="glass-panel" style={{ height: 'fit-content' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '1.25rem' }}>
-          <div
-            style={{
-              width: '48px',
-              height: '48px',
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, var(--crimson-500), #991b1b)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'white',
-              fontWeight: 800,
-              fontSize: '1.2rem',
-            }}
-          >
-            {donorProfile ? donorProfile.blood_group : '🩸'}
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 350px) 1fr', gap: '1.5rem', alignItems: 'start' }}>
+      {/* ── Left Column: Donor Profile & Donation History ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        {/* 1. Donor Profile Card */}
+        <div className="glass-panel" style={{ height: 'fit-content' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '1.25rem' }}>
+            <div
+              style={{
+                width: '48px',
+                height: '48px',
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, var(--crimson-500), #991b1b)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontWeight: 800,
+                fontSize: '1.2rem',
+              }}
+            >
+              {donorProfile ? donorProfile.blood_group : '🩸'}
+            </div>
+            <div>
+              <h2 style={{ fontSize: '1.15rem', fontWeight: 700 }}>{user?.full_name || 'Donor Profile'}</h2>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{user?.email}</p>
+            </div>
           </div>
-          <div>
-            <h2 style={{ fontSize: '1.15rem', fontWeight: 700 }}>{user?.full_name || 'Donor Profile'}</h2>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{user?.email}</p>
-          </div>
+
+          {donorProfile && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.45rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Blood Group</span>
+                <span style={{ fontWeight: 800, color: 'var(--crimson-500)', fontSize: '1.1rem' }}>{donorProfile.blood_group}</span>
+              </div>
+
+              {/* Account Donation Status */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.45rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Account Donation Status</span>
+                <span
+                  style={{
+                    fontWeight: 800,
+                    fontSize: '0.78rem',
+                    color: isPermanentlyDeferred
+                      ? 'var(--crimson-400)'
+                      : isDeferred
+                      ? 'var(--amber-400)'
+                      : isCoolingActive
+                      ? 'var(--amber-400)'
+                      : donorProfile.is_available
+                      ? 'var(--emerald-400)'
+                      : 'var(--text-muted)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                  }}
+                >
+                  {isPermanentlyDeferred ? (
+                    <XCircle size={14} />
+                  ) : isDeferred ? (
+                    <AlertTriangle size={14} />
+                  ) : isCoolingActive ? (
+                    <Clock size={14} />
+                  ) : donorProfile.is_available ? (
+                    <ShieldCheck size={14} />
+                  ) : (
+                    <Clock size={14} />
+                  )}
+                  {isPermanentlyDeferred
+                    ? 'Not Eligible'
+                    : isDeferred
+                    ? 'Temporarily Deferred'
+                    : isCoolingActive
+                    ? `Cooling Active (${daysUntilEligible}d left)`
+                    : donorProfile.is_available
+                    ? 'Eligible (Active)'
+                    : 'Eligible (Standby)'}
+                </span>
+              </div>
+
+              {/* Interval Since Previous Donation */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.45rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Interval Since Previous Donation</span>
+                <span style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--text-main)', textAlign: 'right' }}>
+                  {donorProfile.last_donation_date
+                    ? `${daysSinceLast ?? 0} days`
+                    : 'Initial Draw (0 days)'}
+                </span>
+              </div>
+
+              {/* Next Safe Draw Date */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.45rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Next Safe Draw</span>
+                <span
+                  style={{
+                    fontWeight: 700,
+                    fontSize: '0.8rem',
+                    color: isCoolingActive ? 'var(--amber-400)' : 'var(--emerald-400)',
+                  }}
+                >
+                  {isCoolingActive ? `${nextEligibleDate} (${daysUntilEligible}d left)` : 'Eligible Today'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.45rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Reliability Rating</span>
+                <span style={{ fontWeight: 700, color: 'var(--emerald-400)' }}>
+                  {(donorProfile.reliability_score * 100).toFixed(0)}%
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.45rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Completed Donations</span>
+                <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{donorProfile.total_successful_donations}</span>
+              </div>
+
+              {/* GPS Location Box */}
+              <div
+                style={{
+                  background: 'var(--color-bg)',
+                  padding: '0.65rem 0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.35rem',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    <MapPin size={13} color="var(--cyan-400)" />
+                    GPS Location
+                  </span>
+                  <button
+                    type="button"
+                    onClick={syncBrowserGps}
+                    disabled={gpsSyncing}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--cyan-400)',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: gpsSyncing ? 'wait' : 'pointer',
+                      textDecoration: 'underline',
+                      padding: 0,
+                    }}
+                  >
+                    {gpsSyncing ? 'Locking GPS...' : 'Sync Browser GPS'}
+                  </button>
+                </div>
+                <div style={{ fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-main)' }}>
+                  {donorProfile.latitude != null && donorProfile.longitude != null
+                    ? `${donorProfile.latitude.toFixed(4)}°, ${donorProfile.longitude.toFixed(4)}°`
+                    : 'Coordinates not synchronized'}
+                </div>
+                {gpsMessage && (
+                  <div style={{ fontSize: '0.7rem', color: 'var(--emerald-400)', marginTop: '0.1rem' }}>
+                    {gpsMessage}
+                  </div>
+                )}
+              </div>
+
+              {/* Availability Status */}
+              <div
+                style={{
+                  background: donorProfile.is_available ? 'rgba(16, 185, 129, 0.1)' : 'rgba(100, 116, 139, 0.1)',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  border: `1px solid ${donorProfile.is_available ? 'var(--emerald-500)' : 'var(--border-subtle)'}`,
+                  marginTop: '0.5rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
+                  alignItems: 'center',
+                  textAlign: 'center',
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.5rem',
+                      fontSize: '1.1rem',
+                      fontWeight: 800,
+                      color: donorProfile.is_available ? 'var(--emerald-600)' : 'var(--text-muted)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: '12px',
+                        height: '12px',
+                        borderRadius: '50%',
+                        background: donorProfile.is_available ? 'var(--emerald-500)' : 'var(--text-dim)',
+                        boxShadow: donorProfile.is_available ? '0 0 10px var(--emerald-500)' : 'none',
+                        animation: donorProfile.is_available ? 'pulseGlow 2s infinite' : 'none',
+                      }}
+                    />
+                    {donorProfile.is_available ? 'ONLINE & READY' : 'OFFLINE (PAUSED)'}
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                    {isDeferred
+                      ? 'Availability is locked while health screening deferral is active.'
+                      : isCoolingActive
+                      ? `In ${COOLDOWN_DAYS}-day cooling recovery period (${daysUntilEligible}d remaining).`
+                      : donorProfile.is_available
+                      ? 'You are actively monitoring for nearby emergency requests.'
+                      : 'You will not receive emergency broadcast alerts.'}
+                  </div>
+                </div>
+
+                <button
+                  id="btn-toggle-availability"
+                  onClick={toggleAvailability}
+                  disabled={(isDeferred || isCoolingActive) && !donorProfile.is_available}
+                  className={`btn ${donorProfile.is_available ? 'btn-secondary' : 'btn-primary'}`}
+                  style={{
+                    width: '100%',
+                    padding: '0.6rem',
+                    fontSize: '0.9rem',
+                    marginTop: '0.25rem',
+                    opacity: (isDeferred || isCoolingActive) && !donorProfile.is_available ? 0.6 : 1,
+                    cursor: (isDeferred || isCoolingActive) && !donorProfile.is_available ? 'not-allowed' : 'pointer',
+                  }}
+                  title={isDeferred ? 'Health deferral active.' : isCoolingActive ? 'Cooling period active.' : undefined}
+                >
+                  {donorProfile.is_available ? 'Pause Emergency Alerts' : 'Go Online to Help'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        {donorProfile && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Blood Group</span>
-              <span style={{ fontWeight: 800, color: 'var(--crimson-500)', fontSize: '1.1rem' }}>{donorProfile.blood_group}</span>
+        {/* ── 2. Donation History Widget (Below Profile) ── */}
+        <div className="glass-panel" style={{ height: 'fit-content' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Clock size={18} color="var(--crimson-500)" />
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>Donation History</h3>
             </div>
+            <span
+              className="badge"
+              style={{
+                background: 'rgba(239, 68, 68, 0.12)',
+                color: 'var(--crimson-500)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                padding: '0.2rem 0.55rem',
+              }}
+            >
+              {completedHistory.length} Record{completedHistory.length === 1 ? '' : 's'}
+            </span>
+          </div>
 
-            {/* Health Clearance Quick Status */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Clinical Clearance</span>
+          {/* Active Missions Notice */}
+          {activeCommitments.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.5rem 0.75rem',
+                background: 'rgba(6, 182, 212, 0.12)',
+                border: '1px solid rgba(6, 182, 212, 0.35)',
+                borderRadius: '8px',
+                marginBottom: '1rem',
+                fontSize: '0.78rem',
+                color: 'var(--cyan-400)',
+              }}
+            >
+              <Navigation size={14} style={{ flexShrink: 0 }} />
+              <span><b>{activeCommitments.length} Active Commitment:</b> En-route to hospital to donate blood (Get to it!)</span>
+            </div>
+          )}
+
+          {/* Cooldown / Interval Summary Pill */}
+          <div
+            style={{
+              background: 'var(--color-bg)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '8px',
+              padding: '0.75rem',
+              marginBottom: '1rem',
+              fontSize: '0.8rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.45rem',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Account Donation Status:</span>
               <span
                 style={{
                   fontWeight: 800,
-                  fontSize: '0.82rem',
-                  color: isEligible ? 'var(--emerald-400)' : 'var(--amber-400)',
+                  fontSize: '0.78rem',
+                  color: isPermanentlyDeferred
+                    ? 'var(--crimson-400)'
+                    : isDeferred
+                    ? 'var(--amber-400)'
+                    : isCoolingActive
+                    ? 'var(--amber-400)'
+                    : 'var(--emerald-400)',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '0.3rem',
                 }}
               >
-                {isEligible ? <ShieldCheck size={14} /> : <AlertTriangle size={14} />}
-                {isEligible ? 'Fit to Donate' : 'Temporarily Deferred'}
+                {isPermanentlyDeferred
+                  ? 'Not Eligible'
+                  : isDeferred
+                  ? 'Temporarily Deferred'
+                  : isCoolingActive
+                  ? `Cooling Active (${daysUntilEligible}d left)`
+                  : 'Eligible & Cleared'}
               </span>
             </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Reliability Rating</span>
-              <span style={{ fontWeight: 700, color: 'var(--emerald-400)' }}>
-                {(donorProfile.reliability_score * 100).toFixed(0)}%
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Interval Since Previous Donation:</span>
+              <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                {donorProfile?.last_donation_date
+                  ? `${daysSinceLast ?? 0} days (${donorProfile.last_donation_date})`
+                  : '0 days (Initial / First Draw)'}
               </span>
             </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Completed Donations</span>
-              <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{donorProfile.total_successful_donations}</span>
-            </div>
-
-            {/* GPS Location Box */}
-            <div
-              style={{
-                background: 'var(--color-bg)',
-                padding: '0.65rem 0.75rem',
-                borderRadius: '8px',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.35rem',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                  <MapPin size={13} color="var(--cyan-400)" />
-                  GPS Location
-                </span>
-                <button
-                  type="button"
-                  onClick={syncBrowserGps}
-                  disabled={gpsSyncing}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--cyan-400)',
-                    fontSize: '0.75rem',
-                    fontWeight: 700,
-                    cursor: gpsSyncing ? 'wait' : 'pointer',
-                    textDecoration: 'underline',
-                    padding: 0,
-                  }}
-                >
-                  {gpsSyncing ? 'Locking GPS...' : 'Sync Browser GPS'}
-                </button>
-              </div>
-              <div style={{ fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-main)' }}>
-                {donorProfile.latitude != null && donorProfile.longitude != null
-                  ? `${donorProfile.latitude.toFixed(4)}°, ${donorProfile.longitude.toFixed(4)}°`
-                  : 'Coordinates not synchronized'}
-              </div>
-              {gpsMessage && (
-                <div style={{ fontSize: '0.7rem', color: 'var(--emerald-400)', marginTop: '0.1rem' }}>
-                  {gpsMessage}
-                </div>
-              )}
-            </div>
-
-            {/* Availability Status */}
-            <div
-              style={{
-                background: donorProfile.is_available ? 'rgba(16, 185, 129, 0.1)' : 'rgba(100, 116, 139, 0.1)',
-                padding: '1rem',
-                borderRadius: '8px',
-                border: `1px solid ${donorProfile.is_available ? 'var(--emerald-500)' : 'var(--border-subtle)'}`,
-                marginTop: '0.5rem',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.75rem',
-                alignItems: 'center',
-                textAlign: 'center',
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.5rem',
-                    fontSize: '1.1rem',
-                    fontWeight: 800,
-                    color: donorProfile.is_available ? 'var(--emerald-600)' : 'var(--text-muted)',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: '12px',
-                      height: '12px',
-                      borderRadius: '50%',
-                      background: donorProfile.is_available ? 'var(--emerald-500)' : 'var(--text-dim)',
-                      boxShadow: donorProfile.is_available ? '0 0 10px var(--emerald-500)' : 'none',
-                      animation: donorProfile.is_available ? 'pulseGlow 2s infinite' : 'none',
-                    }}
-                  />
-                  {donorProfile.is_available ? 'ONLINE & READY' : 'OFFLINE (PAUSED)'}
-                </div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.4 }}>
-                  {isDeferred
-                    ? 'Availability is locked while health screening deferral is active.'
-                    : donorProfile.is_available
-                    ? 'You are actively monitoring for nearby emergency requests.'
-                    : 'You will not receive emergency broadcast alerts.'}
-                </div>
-              </div>
-
-              <button
-                id="btn-toggle-availability"
-                onClick={toggleAvailability}
-                disabled={isDeferred && !donorProfile.is_available}
-                className={`btn ${donorProfile.is_available ? 'btn-secondary' : 'btn-primary'}`}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Next Safe Draw Date:</span>
+              <span
                 style={{
-                  width: '100%',
-                  padding: '0.6rem',
-                  fontSize: '0.9rem',
-                  marginTop: '0.25rem',
-                  opacity: isDeferred && !donorProfile.is_available ? 0.6 : 1,
-                  cursor: isDeferred && !donorProfile.is_available ? 'not-allowed' : 'pointer',
+                  fontWeight: 700,
+                  color: isCoolingActive ? 'var(--amber-400)' : 'var(--emerald-400)',
                 }}
-                title={isDeferred ? 'Health deferral active. Update checkup to clear.' : undefined}
               >
-                {donorProfile.is_available ? 'Pause Emergency Alerts' : 'Go Online to Help'}
-              </button>
+                {isCoolingActive ? `${nextEligibleDate} (${daysUntilEligible}d remaining)` : 'Eligible Today'}
+              </span>
             </div>
           </div>
-        )}
+
+          {/* History Records List */}
+          {completedHistory.length === 0 ? (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: '1.5rem 1rem',
+                color: 'var(--text-muted)',
+                background: 'var(--color-bg)',
+                borderRadius: '8px',
+                border: '1px dashed var(--border-subtle)',
+              }}
+            >
+              <Heart size={24} color="var(--text-dim)" style={{ marginBottom: '0.4rem' }} />
+              <p style={{ fontSize: '0.82rem', margin: 0 }}>No past fulfilled donations yet.</p>
+              <p style={{ fontSize: '0.74rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
+                Once you accept a request and the hospital marks it as fulfilled/received, your verified donation record will appear here.
+              </p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', maxHeight: '380px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+              {completedHistory.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    background: 'var(--color-bg)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: '8px',
+                    padding: '0.65rem 0.75rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.35rem',
+                    transition: 'border-color 0.15s ease',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                      {item.hospital_name || 'Medical Center'}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '0.7rem',
+                        fontWeight: 800,
+                        padding: '0.15rem 0.45rem',
+                        borderRadius: '4px',
+                        background: 'rgba(16, 185, 129, 0.15)',
+                        color: 'var(--emerald-400)',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                      }}
+                    >
+                      FULFILLED / COMPLETED
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                      <Droplet size={11} color="var(--crimson-500)" />
+                      {item.units} x {item.blood_group} ({item.component_type === 'PRBC' ? 'Red Blood Cells' : item.component_type})
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <span>{item.donated_at.split('T')[0]}</span>
+                      <span style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>
+                        ({Math.max(0, Math.floor((today.getTime() - new Date(item.donated_at).getTime()) / (1000 * 3600 * 24)))}d ago)
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Right Column: Health Report & Urgent Broadcasts ── */}
@@ -585,6 +855,86 @@ export const DonorDashboard: React.FC = () => {
                 <FileText size={14} />
                 Certificate
               </button>
+            </div>
+          </div>
+
+          {/* Account Donation Status & Interval Bar */}
+          <div
+            style={{
+              background: 'var(--color-bg)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '8px',
+              padding: '0.85rem 1rem',
+              marginBottom: '1.25rem',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: '1rem',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Account Donation Status
+              </div>
+              <div
+                style={{
+                  fontSize: '0.95rem',
+                  fontWeight: 800,
+                  marginTop: '0.2rem',
+                  color: isPermanentlyDeferred
+                    ? 'var(--crimson-400)'
+                    : isDeferred
+                    ? 'var(--amber-400)'
+                    : isCoolingActive
+                    ? 'var(--amber-400)'
+                    : 'var(--emerald-400)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                }}
+              >
+                {isPermanentlyDeferred ? (
+                  <XCircle size={15} />
+                ) : isDeferred ? (
+                  <AlertTriangle size={15} />
+                ) : isCoolingActive ? (
+                  <Clock size={15} />
+                ) : (
+                  <ShieldCheck size={15} />
+                )}
+                {isPermanentlyDeferred
+                  ? 'Not Eligible'
+                  : isDeferred
+                  ? 'Temporarily Deferred'
+                  : isCoolingActive
+                  ? `Cooling Active (${daysUntilEligible}d left)`
+                  : 'Eligible & Cleared'}
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Interval Since Previous Donation
+              </div>
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '0.2rem' }}>
+                {donorProfile?.last_donation_date
+                  ? `${daysSinceLast ?? 0} days elapsed`
+                  : 'Initial Draw (0 days)'}
+              </div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
+                {donorProfile?.last_donation_date ? `Last: ${donorProfile.last_donation_date}` : 'No prior donations recorded'}
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Required Recovery Interval
+              </div>
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: isCoolingActive ? 'var(--amber-400)' : 'var(--emerald-400)', marginTop: '0.2rem' }}>
+                {isCoolingActive ? `Next: ${nextEligibleDate}` : 'Eligible for Draw Today'}
+              </div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
+                56-Day Whole Blood Standard
+              </div>
             </div>
           </div>
 
@@ -779,7 +1129,7 @@ export const DonorDashboard: React.FC = () => {
               Urgent Blood Requests Near You
             </h2>
             <span className="badge badge-red">
-              {activeAlerts.length} Urgent Request{activeAlerts.length !== 1 ? 's' : ''}
+              {matchingAlerts.length} Urgent Request{matchingAlerts.length !== 1 ? 's' : ''}
             </span>
           </div>
 
@@ -799,7 +1149,186 @@ export const DonorDashboard: React.FC = () => {
             </div>
           )}
 
-          {lastResult && (
+          {/* Hospital Fulfillment Success Celebration Banner */}
+          {fulfilledNotification && (
+            <div
+              style={{
+                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(6, 182, 212, 0.18))',
+                border: '1.5px solid var(--emerald-500)',
+                padding: '1rem 1.25rem',
+                borderRadius: '12px',
+                marginBottom: '1.25rem',
+                fontSize: '0.92rem',
+                fontWeight: 700,
+                color: 'var(--text-main)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.75rem',
+                boxShadow: '0 0 25px rgba(16, 185, 129, 0.25)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <CheckCircle size={22} color="var(--emerald-400)" style={{ flexShrink: 0 }} />
+                <span>{fulfilledNotification}</span>
+              </div>
+              <button
+                onClick={() => setFulfilledNotification(null)}
+                aria-label="Dismiss message"
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+          )}
+
+          {/* ── Active In-Progress Commitments ("Get to It!") ── */}
+          {activeCommitments.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+              {activeCommitments.map((comm) => (
+                <div
+                  key={comm.id}
+                  id={`active-mission-${comm.request_id || comm.id}`}
+                  className="glass-panel"
+                  style={{
+                    border: '2px solid var(--cyan-500)',
+                    background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.12), rgba(15, 23, 42, 0.75))',
+                    padding: '1.25rem 1.5rem',
+                    position: 'relative',
+                    boxShadow: '0 0 25px rgba(6, 182, 212, 0.18)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                      <div
+                        style={{
+                          width: '44px',
+                          height: '44px',
+                          borderRadius: '10px',
+                          background: 'rgba(6, 182, 212, 0.2)',
+                          border: '1.5px solid var(--cyan-400)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Navigation size={22} color="var(--cyan-400)" />
+                      </div>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span className="badge badge-cyan" style={{ fontSize: '0.75rem', fontWeight: 800 }}>
+                            🚨 ACTIVE MISSION — GET TO IT!
+                          </span>
+                          <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                            {comm.units}x {comm.blood_group} ({comm.component_type === 'PRBC' ? 'Red Blood Cells' : comm.component_type})
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                          Request Identifier: <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--cyan-300)' }}>{comm.request_code || (comm.request_id ? `REQ-${comm.request_id.slice(0, 6).toUpperCase()}` : 'EMERGENCY-REQ')}</b>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        padding: '0.4rem 0.85rem',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        background: 'rgba(245, 158, 11, 0.15)',
+                        color: 'var(--amber-400)',
+                        border: '1px solid rgba(245, 158, 11, 0.35)',
+                      }}
+                    >
+                      <Clock size={14} />
+                      Awaiting Blood Donation at Ward
+                    </div>
+                  </div>
+
+                  {/* Destination & Actionable Instructions */}
+                  <div
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.75)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: '8px',
+                      padding: '0.9rem 1.1rem',
+                      marginTop: '0.5rem',
+                      marginBottom: '1rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.98rem', fontWeight: 700, color: 'var(--cyan-300)', marginBottom: '0.25rem' }}>
+                      <MapPin size={16} color="var(--cyan-400)" />
+                      Destination: {comm.hospital_name || 'Emergency Partner Hospital'}
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '0.6rem' }}>
+                      📍 {comm.hospital_address || 'Central District Hospital Emergency Transfusion Ward'}
+                    </div>
+                    <div style={{ fontSize: '0.86rem', color: 'var(--text-main)', lineHeight: 1.45, background: 'rgba(6, 182, 212, 0.08)', padding: '0.6rem 0.8rem', borderRadius: '6px', borderLeft: '3px solid var(--cyan-400)' }}>
+                      <b>Get to it!</b> You accepted this blood donation commitment. Please head to <b>{comm.hospital_name || 'the hospital'}</b> immediately to donate your blood. Once you arrive at the transfusion ward and donate blood, hospital clinical staff will confirm receipt and mark this request as <b>Fulfilled</b>.
+                    </div>
+                  </div>
+
+                  {/* Distance / ETA / Commitment Metrics */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+                    <div style={{ background: 'var(--color-bg)', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700 }}>DISTANCE TO WARD</div>
+                      <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '0.15rem' }}>
+                        {comm.distance_km != null ? `${comm.distance_km} km` : '~3.5 km'}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--color-bg)', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700 }}>ESTIMATED TRANSIT (ETA)</div>
+                      <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--cyan-400)', marginTop: '0.15rem' }}>
+                        ~{Math.round((comm.distance_km ?? 3.5) * 2.5 + 5)} min
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--color-bg)', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700 }}>YOUR COMMITMENT</div>
+                      <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--emerald-400)', marginTop: '0.15rem' }}>
+                        {comm.units} Bag{comm.units > 1 ? 's' : ''} Confirmed
+                      </div>
+                    </div>
+                  </div>
+
+                  {telemetryStatus && (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--cyan-400)', padding: '0.45rem 0.75rem', background: 'rgba(6, 182, 212, 0.1)', borderRadius: '6px', marginBottom: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <Radio size={14} /> {telemetryStatus}
+                    </div>
+                  )}
+
+                  {/* Live Telemetry Actions */}
+                  <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => transmitTelemetry(false)}
+                      disabled={telemetrySending}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.8rem', padding: '0.45rem 0.9rem' }}
+                    >
+                      <Radio size={14} />
+                      {telemetrySending ? 'Pinging GPS...' : 'Transmit Live GPS Telemetry'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => transmitTelemetry(true)}
+                      disabled={telemetrySending}
+                      className="btn btn-cyan"
+                      style={{ fontSize: '0.8rem', padding: '0.45rem 0.9rem' }}
+                      title="Simulates moving within 350m of hospital ward to trigger trauma thaw alert"
+                    >
+                      <Navigation size={14} />
+                      Simulate Ward Approach (&lt;500m)
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeCommitments.length === 0 && lastResult && (
             <div
               style={{
                 background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 182, 212, 0.08))',
@@ -813,14 +1342,14 @@ export const DonorDashboard: React.FC = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Navigation size={18} color="var(--emerald-400)" />
                   <span style={{ fontWeight: 800, color: 'var(--emerald-400)', fontSize: '1rem' }}>
-                    En-Route to Recipient Hospital
+                    En-Route to Recipient Hospital — Get To It!
                   </span>
                 </div>
                 <span className="badge badge-green">DISPATCH CONFIRMED</span>
               </div>
 
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                Thank you! You are confirmed to help this patient. Please head toward the hospital. Live GPS telemetry streams your position to calculate real-time ETA and trigger the trauma bay thaw alert.
+                Thank you! You are confirmed to help this patient. Please head toward the hospital immediately. Live GPS telemetry streams your position to calculate real-time ETA.
               </p>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.75rem', marginTop: '0.85rem', marginBottom: '0.85rem' }}>
@@ -907,7 +1436,7 @@ export const DonorDashboard: React.FC = () => {
             </div>
           )}
 
-          {activeAlerts.length === 0 && (
+          {matchingAlerts.length === 0 && (
             <div className="glass-panel" style={{ textAlign: 'center', padding: '3.5rem', color: 'var(--text-muted)' }}>
               <UserCheck size={36} color="var(--text-dim)" style={{ marginBottom: '0.75rem' }} />
               <p>No open emergency blood requests matching your group right now.</p>
@@ -920,7 +1449,7 @@ export const DonorDashboard: React.FC = () => {
           )}
 
           {/* Alerts that were dismissed stay reachable here */}
-          {activeAlerts.length > 0 && visibleAlerts.length === 0 && (
+          {matchingAlerts.length > 0 && visibleAlerts.length === 0 && (
             <div className="glass-panel" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
               <p>You have set aside {activeAlerts.length} alert(s).</p>
               <button

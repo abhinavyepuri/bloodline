@@ -185,3 +185,33 @@ async def test_bags_offered_capped_at_remaining_shortfall(
     assert bob_res.json()["units_covered"] == 3
     assert bob_res.json()["shortfall"] == 0
     assert bob_res.json()["request_status"] == "COMMITTED_IN_TRANSIT"
+
+
+@pytest.mark.asyncio
+async def test_donor_donation_history_endpoint(
+    client, blood_bank_token, hospital_token
+):
+    """
+    Test GET /api/v1/donors/me/history:
+    Verifies that donor donation history returns structured records,
+    aggregates multi-unit commits as '2 x O- (PRBC)', and orders descending by date.
+    """
+    token = (
+        await client.post(
+            "/api/v1/auth/login", json={"email": "alice@donor.org", "password": "password123"}
+        )
+    ).json()["access_token"]
+
+    history_res = await client.get("/api/v1/donors/me/history", headers=auth(token))
+    assert history_res.status_code == 200
+    history = history_res.json()
+    assert len(history) >= 1
+    for item in history:
+        assert "hospital_name" in item
+        assert "blood_group" in item
+        assert "component_type" in item
+        assert "units" in item
+        assert "status" in item
+        assert "donated_at" in item
+        assert "notes" in item
+        assert f"{item['units']} x {item['blood_group']}" in item["notes"]

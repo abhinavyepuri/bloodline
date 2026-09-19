@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# generated datasets
+*/smartblood_synthetic_data.csv
+*/*_predictions_with_actuals.csv
+*/*_predictions.csv
+*/*_analysis.csv
+*/*_analysis.html
+*/*_metric.csv

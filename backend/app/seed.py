@@ -59,8 +59,32 @@ async def seed_data():
         user_bb = User(
             email="bloodbank@smartblood.org",
             hashed_password=hashed_pwd,
-            full_name="Metro Blood Logistics Staff",
+            full_name="Metro Blood Central Staff",
             phone_number="+1-555-0201",
+            role=UserRole.BLOOD_BANK,
+            is_verified=True
+        )
+        user_bb_2 = User(
+            email="redcross@smartblood.org",
+            hashed_password=hashed_pwd,
+            full_name="City Red Cross Blood Staff",
+            phone_number="+1-555-0202",
+            role=UserRole.BLOOD_BANK,
+            is_verified=True
+        )
+        user_bb_3 = User(
+            email="stjude.bb@smartblood.org",
+            hashed_password=hashed_pwd,
+            full_name="St. Jude Blood Center Staff",
+            phone_number="+1-555-0203",
+            role=UserRole.BLOOD_BANK,
+            is_verified=True
+        )
+        user_bb_4 = User(
+            email="apex.bloodbank@smartblood.org",
+            hashed_password=hashed_pwd,
+            full_name="Apex Transfusion Logistics Staff",
+            phone_number="+1-555-0204",
             role=UserRole.BLOOD_BANK,
             is_verified=True
         )
@@ -212,7 +236,8 @@ async def seed_data():
         )
 
         db.add_all([
-            user_hosp_a, user_hosp_b, user_bb,
+            user_hosp_a, user_hosp_b,
+            user_bb, user_bb_2, user_bb_3, user_bb_4,
             user_donor_1, user_donor_2, user_donor_3,
             user_donor_4, user_donor_5, user_donor_6,
             user_donor_7, user_donor_8,
@@ -249,10 +274,10 @@ async def seed_data():
         db.add_all([hosp_a, hosp_b])
         await db.flush()
 
-        # 4. Create Blood Bank (~0.9 km from Hospital A)
-        bb = BloodBank(
+        # 4. Create 4 Blood Banks across metropolitan sectors
+        bb_1 = BloodBank(
             user_id=user_bb.id,
-            name="Metro Blood Services",
+            name="Metro Blood Central",
             license_number="BB-BLR-001",
             address="45 Logistics Lane, Central District",
             contact_phone="+1-555-0201",
@@ -260,34 +285,64 @@ async def seed_data():
             longitude=77.5990,
             location=ST_SetSRID(ST_Point(77.5990, 12.9750), 4326)
         )
-        db.add(bb)
+        bb_2 = BloodBank(
+            user_id=user_bb_2.id,
+            name="City Red Cross Blood Bank",
+            license_number="BB-BLR-002",
+            address="120 Hope Avenue, West Wing",
+            contact_phone="+1-555-0202",
+            latitude=12.9680,
+            longitude=77.5850,
+            location=ST_SetSRID(ST_Point(77.5850, 12.9680), 4326)
+        )
+        bb_3 = BloodBank(
+            user_id=user_bb_3.id,
+            name="St. Jude Regional Blood Center",
+            license_number="BB-BLR-003",
+            address="255 North Boulevard, Medical Hub",
+            contact_phone="+1-555-0203",
+            latitude=12.9810,
+            longitude=77.6020,
+            location=ST_SetSRID(ST_Point(77.6020, 12.9810), 4326)
+        )
+        bb_4 = BloodBank(
+            user_id=user_bb_4.id,
+            name="Apex Transfusion & Trauma Logistics",
+            license_number="BB-BLR-004",
+            address="88 Ring Road, South Sector",
+            contact_phone="+1-555-0204",
+            latitude=12.9550,
+            longitude=77.6150,
+            location=ST_SetSRID(ST_Point(77.6150, 12.9550), 4326)
+        )
+        bb = bb_1  # Alias for backward-compatibility with downstream tests/seeds
+        db.add_all([bb_1, bb_2, bb_3, bb_4])
         await db.flush()
 
-        # 5. Create Inventory Units
-        # Exactly matching Section 14: BB-001 and BB-002 are O- PRBC units
+        # 5. Create Inventory Units across blood banks
         now = datetime.now(timezone.utc)
         unit_1 = InventoryUnit(
-            blood_bank_id=bb.id,
+            blood_bank_id=bb_1.id,
             batch_number="BB-001",
             blood_group="O-",
             component_type=BloodComponentType.PRBC,
-            volume_ml=300.0,
+            volume_ml=350.0,
             collection_date=now - timedelta(days=10),
-            expiry_date=now + timedelta(days=90),  # exp ~3 months
+            expiry_date=now + timedelta(days=90),
             status=UnitStatus.AVAILABLE
         )
         unit_2 = InventoryUnit(
-            blood_bank_id=bb.id,
+            blood_bank_id=bb_1.id,
             batch_number="BB-002",
             blood_group="O-",
             component_type=BloodComponentType.PRBC,
-            volume_ml=300.0,
+            volume_ml=350.0,
             collection_date=now - timedelta(days=5),
-            expiry_date=now + timedelta(days=120),  # exp ~4 months
+            expiry_date=now + timedelta(days=120),
             status=UnitStatus.AVAILABLE
         )
         unit_3 = InventoryUnit(
-            blood_bank_id=bb.id,
+            blood_bank_id=bb_1.id,
             batch_number="BB-003",
             blood_group="A+",
             component_type=BloodComponentType.PRBC,
@@ -297,7 +352,7 @@ async def seed_data():
             status=UnitStatus.AVAILABLE
         )
         unit_4 = InventoryUnit(
-            blood_bank_id=bb.id,
+            blood_bank_id=bb_1.id,
             batch_number="BB-004",
             blood_group="B+",
             component_type=BloodComponentType.PLATELETS,
@@ -306,7 +361,80 @@ async def seed_data():
             expiry_date=now + timedelta(days=5),
             status=UnitStatus.AVAILABLE
         )
-        db.add_all([unit_1, unit_2, unit_3, unit_4])
+        # Red Cross Inventory (Surplus stock for transfer testing)
+        unit_5 = InventoryUnit(
+            blood_bank_id=bb_2.id,
+            batch_number="RC-001",
+            blood_group="O+",
+            component_type=BloodComponentType.PRBC,
+            volume_ml=350.0,
+            collection_date=now - timedelta(days=4),
+            expiry_date=now + timedelta(days=60),
+            status=UnitStatus.AVAILABLE
+        )
+        unit_6 = InventoryUnit(
+            blood_bank_id=bb_2.id,
+            batch_number="RC-002",
+            blood_group="O-",
+            component_type=BloodComponentType.PRBC,
+            volume_ml=350.0,
+            collection_date=now - timedelta(days=8),
+            expiry_date=now + timedelta(days=45),
+            status=UnitStatus.AVAILABLE
+        )
+        unit_7 = InventoryUnit(
+            blood_bank_id=bb_2.id,
+            batch_number="RC-003",
+            blood_group="A-",
+            component_type=BloodComponentType.PLATELETS,
+            volume_ml=250.0,
+            collection_date=now - timedelta(days=1),
+            expiry_date=now + timedelta(days=4),
+            status=UnitStatus.AVAILABLE
+        )
+        # St. Jude BB Inventory
+        unit_8 = InventoryUnit(
+            blood_bank_id=bb_3.id,
+            batch_number="SJ-001",
+            blood_group="B-",
+            component_type=BloodComponentType.PRBC,
+            volume_ml=350.0,
+            collection_date=now - timedelta(days=3),
+            expiry_date=now + timedelta(days=70),
+            status=UnitStatus.AVAILABLE
+        )
+        unit_9 = InventoryUnit(
+            blood_bank_id=bb_3.id,
+            batch_number="SJ-002",
+            blood_group="AB-",
+            component_type=BloodComponentType.FFP,
+            volume_ml=250.0,
+            collection_date=now - timedelta(days=15),
+            expiry_date=now + timedelta(days=300),
+            status=UnitStatus.AVAILABLE
+        )
+        # Apex Logistics Inventory
+        unit_10 = InventoryUnit(
+            blood_bank_id=bb_4.id,
+            batch_number="APX-001",
+            blood_group="AB+",
+            component_type=BloodComponentType.PRBC,
+            volume_ml=350.0,
+            collection_date=now - timedelta(days=2),
+            expiry_date=now + timedelta(days=85),
+            status=UnitStatus.AVAILABLE
+        )
+        unit_11 = InventoryUnit(
+            blood_bank_id=bb_4.id,
+            batch_number="APX-002",
+            blood_group="O+",
+            component_type=BloodComponentType.PLATELETS,
+            volume_ml=250.0,
+            collection_date=now - timedelta(days=1),
+            expiry_date=now + timedelta(days=4),
+            status=UnitStatus.AVAILABLE
+        )
+        db.add_all([unit_1, unit_2, unit_3, unit_4, unit_5, unit_6, unit_7, unit_8, unit_9, unit_10, unit_11])
         await db.flush()
 
         # 6. Create Donors (Matching Section 14: D1 at 2.1km, D2 at 3.8km)
@@ -590,14 +718,149 @@ async def seed_data():
             health_reports.append(hr)
 
         db.add_all(health_reports)
+        await db.flush()
+
+        # 7. Create Emergency Blood Requests & Allocations
+        from app.models.request import TriageLevel, RequestStatus
+        from app.models.allocation import AllocationSourceType, AllocationStatus
+
+        # Request 1: Metro General - Massive Transfusion Protocol (O- PRBC 2 units)
+        req_1 = BloodRequest(
+            hospital_id=hosp_a.id,
+            patient_id_token="PT-TRAUMA-9011",
+            required_blood_group="O-",
+            component_type=BloodComponentType.PRBC,
+            units_requested=2,
+            triage_level=TriageLevel.MASSIVE_TRANSFUSION_PROTOCOL,
+            calculated_urgency_score=96.5,
+            deadline_at=now + timedelta(minutes=45),
+            status=RequestStatus.PROXIMITY_ZONE_NOTIFIED,
+        )
+
+        # Request 2: St. Jude Emergency - Active Trauma (A+ PRBC 3 units, 1 soft-locked from BB)
+        req_2 = BloodRequest(
+            hospital_id=hosp_b.id,
+            patient_id_token="PT-SURG-4402",
+            required_blood_group="A+",
+            component_type=BloodComponentType.PRBC,
+            units_requested=3,
+            triage_level=TriageLevel.ACTIVE_TRAUMA,
+            calculated_urgency_score=84.0,
+            deadline_at=now + timedelta(hours=2),
+            status=RequestStatus.PROXIMITY_ZONE_NOTIFIED,
+        )
+
+        # Request 3: Metro General - Scheduled Surgery (B+ Platelets 1 unit, fulfilled from BB-004)
+        req_3 = BloodRequest(
+            hospital_id=hosp_a.id,
+            patient_id_token="PT-ONC-1123",
+            required_blood_group="B+",
+            component_type=BloodComponentType.PLATELETS,
+            units_requested=1,
+            triage_level=TriageLevel.SCHEDULED_EMERGENCY_RESERVE,
+            calculated_urgency_score=62.0,
+            deadline_at=now + timedelta(hours=6),
+            status=RequestStatus.COMMITTED_IN_TRANSIT,
+        )
+
+        # Request 4: St. Jude Emergency - Urgent Cardiac (B- PRBC 1 unit)
+        req_4 = BloodRequest(
+            hospital_id=hosp_b.id,
+            patient_id_token="PT-CARD-8819",
+            required_blood_group="B-",
+            component_type=BloodComponentType.PRBC,
+            units_requested=1,
+            triage_level=TriageLevel.ACTIVE_TRAUMA,
+            calculated_urgency_score=79.0,
+            deadline_at=now + timedelta(hours=3),
+            status=RequestStatus.PROXIMITY_ZONE_NOTIFIED,
+        )
+
+        # Request 5: Metro General - Routine Orthopedic (AB- Whole Blood 1 unit)
+        req_5 = BloodRequest(
+            hospital_id=hosp_a.id,
+            patient_id_token="PT-ORTHO-3041",
+            required_blood_group="AB-",
+            component_type=BloodComponentType.WHOLE_BLOOD,
+            units_requested=1,
+            triage_level=TriageLevel.ROUTINE_CLINICAL,
+            calculated_urgency_score=35.0,
+            deadline_at=now + timedelta(hours=24),
+            status=RequestStatus.PROXIMITY_ZONE_NOTIFIED,
+        )
+
+        db.add_all([req_1, req_2, req_3, req_4, req_5])
+        await db.flush()
+
+        # Allocations
+        alloc_1 = Allocation(
+            request_id=req_2.id,
+            source_type=AllocationSourceType.BLOOD_BANK_INVENTORY,
+            inventory_unit_id=unit_3.id,
+            status=AllocationStatus.SOFT_LOCKED,
+            estimated_transit_minutes=18.5,
+            distance_km=4.2,
+            allocated_at=now - timedelta(minutes=10),
+        )
+        unit_3.status = UnitStatus.LOCKED_RESERVE
+        unit_3.lock_expires_at = now + timedelta(minutes=20)
+
+        alloc_2 = Allocation(
+            request_id=req_3.id,
+            source_type=AllocationSourceType.BLOOD_BANK_INVENTORY,
+            inventory_unit_id=unit_4.id,
+            status=AllocationStatus.IN_TRANSIT,
+            estimated_transit_minutes=12.0,
+            distance_km=2.8,
+            allocated_at=now - timedelta(minutes=30),
+        )
+        unit_4.status = UnitStatus.DISPATCHED
+
+        db.add_all([alloc_1, alloc_2])
+        await db.flush()
+
+        # Audit Logs
+        audit_1 = AllocationAuditLog(
+            request_id=req_1.id,
+            decision_type="INITIAL_MATCH",
+            urgency_score=96.5,
+            candidate_scores_json={
+                "proximity_weight": 0.45,
+                "reliability_weight": 0.35,
+                "urgency_weight": 0.20,
+                "alerted_donors": [d1.id, d2.id],
+            },
+            selected_resource_id=f"DONOR_ZONE_O_NEG",
+            rationale_summary="MTP Level 1 emergency broadcast. No O- inventory in immediate lock radius; proximity geofence alert dispatched to top reliable O- live donors.",
+        )
+        audit_2 = AllocationAuditLog(
+            request_id=req_2.id,
+            allocation_id=alloc_1.id,
+            decision_type="INITIAL_MATCH",
+            urgency_score=84.0,
+            candidate_scores_json={
+                "proximity_weight": 0.50,
+                "expiry_weight": 0.30,
+                "compatibility_weight": 0.20,
+                "selected_unit": unit_3.id,
+            },
+            selected_resource_id=unit_3.id,
+            rationale_summary="Unit BB-003 (A+ PRBC) soft-locked from Metro Blood Services. Remaining 2 units routed to live donor matching engine.",
+        )
+        db.add_all([audit_1, audit_2])
+
         await db.commit()
 
         print("Synthetic database seeded successfully!")
         print("Pre-configured accounts:")
         print("  System Admin:      admin@smartblood.org       / password123")
-        print("  Hospital Admin:    hospital@smartblood.org    / password123")
+        print("  Coordinator:       coordinator@smartblood.org / password123")
+        print("  Hospital Admin 1:  hospital@smartblood.org    / password123")
         print("  Hospital Admin 2:  stjude@smartblood.org      / password123")
-        print("  Blood Bank Staff:  bloodbank@smartblood.org   / password123")
+        print("  Blood Bank 1:      bloodbank@smartblood.org   / password123 (Metro Blood Central)")
+        print("  Blood Bank 2:      redcross@smartblood.org    / password123 (City Red Cross Blood Bank)")
+        print("  Blood Bank 3:      stjude.bb@smartblood.org   / password123 (St. Jude Regional Blood Center)")
+        print("  Blood Bank 4:      apex.bloodbank@smartblood.org / password123 (Apex Transfusion Logistics)")
         print("  Donor 1  – Alice   (O-):  alice@donor.org            / password123")
         print("  Donor 2  – Bob     (O-):  bob@donor.org              / password123")
         print("  Donor 3  – Charlie (A+):  charlie@donor.org          / password123")

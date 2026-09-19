@@ -443,7 +443,7 @@ async def test_quarantining_a_reserved_unit_keeps_the_rest_covered(
 
     # Break one of the two reserved units.
     inventory = (await client.get("/api/v1/inventory", headers=auth(blood_bank_token))).json()
-    reserved = [u for u in inventory if u["status"] == "LOCKED_RESERVE"]
+    reserved = [u for u in inventory if u["status"] == "LOCKED_RESERVE" and u["blood_group"] == "O-"]
     assert len(reserved) == 2, f"expected both units reserved, saw {len(reserved)}"
 
     await client.patch(
