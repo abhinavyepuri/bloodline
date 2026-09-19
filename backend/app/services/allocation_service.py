@@ -136,14 +136,16 @@ class AllocationService:
         radius_km: Optional[float] = None,
     ) -> Tuple[List[Tuple[Donor, float]], float]:
         """
-        Search the default geofence first, then expand to the configured wider
-        radius before giving up. First checks donors with verified fresh locations (<= DONOR_LOCATION_TTL_MINUTES).
+        Search the default geofence first, then expand to wider radii (15km, 50km)
+        before giving up. First checks donors with verified fresh locations (<= DONOR_LOCATION_TTL_MINUTES).
         Falls back to all eligible donors only if no fresh-location donors are found.
         """
         radii: List[float] = [radius_km if radius_km is not None else settings.DEFAULT_GEOFENCE_RADIUS_KM]
         expanded = settings.EXPANDED_GEOFENCE_RADIUS_KM
         if expanded > radii[0]:
             radii.append(expanded)
+        if 50.0 not in radii:
+            radii.append(50.0)
 
         # 1. Prioritize donors with fresh location updates within the TTL
         for radius in radii:
@@ -178,12 +180,13 @@ class AllocationService:
         radius_km: Optional[float] = None,
         request: Optional[BloodRequest] = None,
         hospital: Optional[Hospital] = None,
+        fulfillment_mode: Optional[str] = "AUTO",
     ) -> Dict[str, Any]:
         """
         Execute the multi-tier allocation pipeline:
 
-        1. Reserve compatible cold-chain inventory (FEFO, nearest blood bank first).
-        2. If stock falls short, alert eligible donors inside the proximity geofence.
+        1. If fulfillment_mode != "DIRECT_DONOR", reserve compatible cold-chain inventory (FEFO, nearest blood bank first).
+        2. If stock falls short (or fulfillment_mode == "DIRECT_DONOR"), alert eligible donors inside the proximity geofence.
         3. Place an alert-zone soft lock and broadcast emergency alerts in parallel.
 
         The request only reports ``COMMITTED_IN_TRANSIT`` once every requested unit is
@@ -204,14 +207,17 @@ class AllocationService:
         units_requested = request.units_requested
         candidate_scores: Dict[str, Any] = {}
 
-        # 1. Cold-chain inventory first, ordered by real proximity then FEFO.
-        inventory_pairs = await self.inventory_repo.find_compatible_units_with_lock(
-            compatible_blood_groups=self._compatible_groups_for(request),
-            component_type=request.component_type,
-            limit=units_requested,
-            hospital_lat=hospital.latitude if hospital else None,
-            hospital_lng=hospital.longitude if hospital else None,
-        )
+        # 1. Cold-chain inventory first (unless DIRECT_DONOR mode requested)
+        if fulfillment_mode == "DIRECT_DONOR":
+            inventory_pairs = []
+        else:
+            inventory_pairs = await self.inventory_repo.find_compatible_units_with_lock(
+                compatible_blood_groups=self._compatible_groups_for(request),
+                component_type=request.component_type,
+                limit=units_requested,
+                hospital_lat=hospital.latitude if hospital else None,
+                hospital_lng=hospital.longitude if hospital else None,
+            )
 
         batches: List[str] = []
         for idx, (unit, distance) in enumerate(inventory_pairs):
@@ -578,17 +584,15 @@ class AllocationService:
                 donor.blood_group, request.required_blood_group
             )
 
-        # Idempotent: a donor who already holds a slot is not given a second one.
-        existing_slot = await lock_mgr.donor_slot(canonical_id, donor_id, request.units_requested)
-        if existing_slot is not None:
-            return {
-                "status": "ALREADY_CLAIMED",
-                "donor_id": donor_id,
-                "slot": existing_slot,
-            }
+        # Shortfall calculation to cap claimed bags
+        covered_before = await self.covered_unit_count(canonical_id)
+        shortfall_before = max(0, request.units_requested - covered_before)
+        if shortfall_before <= 0:
+            raise AllocationRaceConditionError(canonical_id)
 
-        slot = await lock_mgr.claim_unit_slot(canonical_id, donor_id, request.units_requested)
-        if slot is None:
+        bags_to_claim = max(1, min(bags_offered, shortfall_before))
+        claimed_slots = await lock_mgr.claim_unit_slots(canonical_id, donor_id, request.units_requested, count=bags_to_claim)
+        if not claimed_slots:
             # Every unit slot is taken by other donors.
             raise AllocationRaceConditionError(canonical_id)
 
@@ -597,16 +601,19 @@ class AllocationService:
             distance_km = self._donor_distance_km(donor, hospital)
             eta_minutes = estimate_eta_minutes(distance_km, DONOR_PREPARATION_MINUTES)
 
-            allocation = Allocation(
-                request_id=canonical_id,
-                source_type=AllocationSourceType.LIVE_DONOR,
-                donor_id=donor_id,
-                status=AllocationStatus.HARD_LOCKED,
-                distance_km=distance_km,
-                estimated_transit_minutes=eta_minutes,
-                allocated_at=datetime.now(timezone.utc),
-            )
-            self.db.add(allocation)
+            allocations = []
+            for _ in claimed_slots:
+                alloc = Allocation(
+                    request_id=canonical_id,
+                    source_type=AllocationSourceType.LIVE_DONOR,
+                    donor_id=donor_id,
+                    status=AllocationStatus.HARD_LOCKED,
+                    distance_km=distance_km,
+                    estimated_transit_minutes=eta_minutes,
+                    allocated_at=datetime.now(timezone.utc),
+                )
+                self.db.add(alloc)
+                allocations.append(alloc)
             await self.db.flush()
 
             covered = await self.covered_unit_count(canonical_id)
@@ -619,6 +626,7 @@ class AllocationService:
                 else RequestStatus.PROXIMITY_ZONE_NOTIFIED
             )
 
+            slot_str = ", ".join(str(s + 1) for s in claimed_slots)
             self.db.add(
                 AllocationAuditLog(
                     request_id=canonical_id,
@@ -626,7 +634,8 @@ class AllocationService:
                     urgency_score=request.calculated_urgency_score,
                     candidate_scores_json={
                         "claimed_by_donor": donor_id,
-                        "slot_index": slot,
+                        "slot_indices": claimed_slots,
+                        "bags_claimed": len(claimed_slots),
                         "distance_km": distance_km,
                         "eta_minutes": eta_minutes,
                         "units_covered": covered,
@@ -634,7 +643,7 @@ class AllocationService:
                     },
                     selected_resource_id=donor_id,
                     rationale_summary=(
-                        f"Donor {donor_id[:8]}... claimed unit slot {slot + 1} of "
+                        f"Donor {donor_id[:8]}... claimed {len(claimed_slots)} unit slot(s) [{slot_str}] of "
                         f"{request.units_requested} ({distance_km}km, ETA ~{eta_minutes}min). "
                         f"{covered}/{request.units_requested} unit(s) now covered."
                     ),
@@ -642,8 +651,9 @@ class AllocationService:
             )
             await self.db.commit()
         except Exception:
-            # Clean up claimed slot from Redis to prevent lock leaking on unexpected DB errors
-            await lock_mgr.release_donor_slot(canonical_id, donor_id, request.units_requested)
+            # Clean up claimed slots from Redis to prevent lock leaking on unexpected DB errors
+            for s in claimed_slots:
+                await redis_conn.delete(lock_mgr._slot_key(canonical_id, s))
             raise
 
         manager.dispatch(
@@ -737,9 +747,9 @@ class AllocationService:
 
         return {
             "status": "HARD_LOCKED_COMMITTED",
-            "allocation_id": allocation.id,
+            "allocation_id": allocations[0].id if allocations else None,
             "donor_id": donor_id,
-            "slot": slot,
+            "slot": claimed_slots[0] if claimed_slots else None,
             "distance_km": distance_km,
             "estimated_transit_minutes": eta_minutes,
             "units_covered": covered,

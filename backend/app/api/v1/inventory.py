@@ -1,7 +1,9 @@
-from typing import List, Optional
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,10 +17,12 @@ from app.core.permissions import UserRole
 from app.models.allocation import Allocation, AllocationSourceType, AllocationStatus
 from app.models.blood_bank import BloodBank
 from app.models.hospital import Hospital
-from app.models.inventory import InventoryUnit, UnitStatus
+from app.models.inventory import BloodComponentType, InventoryUnit, UnitStatus
 from app.models.request import BloodRequest, RequestStatus
 from app.models.user import User
 from app.schemas.inventory import (
+    InventoryBatchCreate,
+    InventoryBatchItem,
     InventoryUnitCreate,
     InventoryUnitOut,
     InventoryUnitUpdateStatus,
@@ -27,6 +31,15 @@ from app.services.allocation_service import AllocationService
 from app.websocket.connection_manager import manager
 
 router = APIRouter()
+
+# Default shelf lives in days per component type
+DEFAULT_SHELF_LIFE_DAYS = {
+    BloodComponentType.PRBC: 42,
+    BloodComponentType.PLATELETS: 5,
+    BloodComponentType.FFP: 365,
+    BloodComponentType.CRYOPRECIPITATE: 365,
+    BloodComponentType.WHOLE_BLOOD: 35,
+}
 
 # Stock operations belong to blood banks; coordinators and admins may step in.
 StockUser = Depends(require_roles(UserRole.BLOOD_BANK, UserRole.COORDINATOR, UserRole.ADMIN))
@@ -138,6 +151,164 @@ async def register_inventory_unit(
         )
 
     return InventoryUnitOut.model_validate(unit)
+
+
+@router.post("/batch", response_model=List[InventoryUnitOut], status_code=status.HTTP_201_CREATED)
+@router.post("/units/batch", response_model=List[InventoryUnitOut], status_code=status.HTTP_201_CREATED)
+async def register_inventory_batch(
+    payload: Union[InventoryBatchCreate, List[InventoryBatchItem]],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = StockUser,
+):
+    """
+    [USER-FACING] Batch register multiple blood packets into blood bank inventory.
+    Supports multi-item batches, quantity multipliers, and bulk generation.
+    Triggers re-planning for any waiting emergency requests across all added blood groups.
+    """
+    bank = await _owning_bank(db, current_user)
+    now_utc = datetime.now(timezone.utc)
+
+    # Normalize payload into a list of items to generate
+    items_to_process: List[InventoryBatchItem] = []
+    top_blood_bank_id: Optional[str] = None
+    batch_prefix: Optional[str] = None
+
+    if isinstance(payload, list):
+        items_to_process = payload
+    else:
+        top_blood_bank_id = payload.blood_bank_id
+        batch_prefix = payload.batch_prefix
+        if payload.items:
+            items_to_process.extend(payload.items)
+        if payload.blood_group and payload.component_type:
+            items_to_process.append(
+                InventoryBatchItem(
+                    blood_group=payload.blood_group,
+                    component_type=payload.component_type,
+                    volume_ml=payload.volume_ml or 450.0,
+                    quantity=payload.quantity or 1,
+                    collection_date=payload.collection_date,
+                    expiry_date=payload.expiry_date,
+                    expiry_days=payload.expiry_days,
+                    blood_bank_id=payload.blood_bank_id,
+                )
+            )
+
+    if not items_to_process:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No inventory units specified in batch request.",
+        )
+
+    units_to_add: List[InventoryUnit] = []
+    distinct_types_added = set()
+
+    for item_idx, item in enumerate(items_to_process):
+        # Resolve target blood bank for each item
+        target_bank_id = item.blood_bank_id or top_blood_bank_id
+        if bank is not None:
+            effective_bank_id = bank.id
+        elif target_bank_id:
+            target_bank = await db.get(BloodBank, target_bank_id)
+            if not target_bank:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Blood bank {target_bank_id} not found for item #{item_idx + 1}",
+                )
+            effective_bank_id = target_bank.id
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="blood_bank_id is required when registering stock as a coordinator or admin.",
+            )
+
+        # Dates calculation
+        coll_date = item.collection_date or now_utc
+        if item.expiry_date:
+            exp_date = item.expiry_date
+        else:
+            days = item.expiry_days or DEFAULT_SHELF_LIFE_DAYS.get(item.component_type, 42)
+            exp_date = coll_date + timedelta(days=days)
+
+        if exp_date <= coll_date:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"expiry_date must be later than collection_date (item #{item_idx + 1}).",
+            )
+
+        qty = max(1, item.quantity)
+        for q_idx in range(qty):
+            if item.batch_number and qty == 1:
+                batch_code = item.batch_number
+            elif item.batch_number:
+                batch_code = f"{item.batch_number}-{q_idx + 1:02d}"
+            elif batch_prefix:
+                batch_code = f"{batch_prefix}{uuid.uuid4().hex[:6].upper()}"
+            else:
+                batch_code = f"BB-{uuid.uuid4().hex[:7].upper()}"
+
+            unit = InventoryUnit(
+                blood_bank_id=effective_bank_id,
+                batch_number=batch_code,
+                blood_group=item.blood_group,
+                component_type=item.component_type,
+                volume_ml=item.volume_ml,
+                collection_date=coll_date,
+                expiry_date=exp_date,
+                status=UnitStatus.AVAILABLE,
+            )
+            units_to_add.append(unit)
+            distinct_types_added.add((unit.blood_group, unit.component_type))
+
+    db.add_all(units_to_add)
+    await db.commit()
+
+    for u in units_to_add:
+        await db.refresh(u)
+
+    # Broadcast batch addition event to connected clients
+    await manager.broadcast_operational(
+        {
+            "type": "INVENTORY_UNIT_ADDED",
+            "batch_count": len(units_to_add),
+            "blood_bank_id": units_to_add[0].blood_bank_id if units_to_add else None,
+            "units_summary": [
+                {
+                    "unit_id": u.id,
+                    "batch_number": u.batch_number,
+                    "blood_group": u.blood_group,
+                    "component_type": u.component_type.value,
+                }
+                for u in units_to_add
+            ],
+        }
+    )
+
+    # Unblock any requests waiting in RE_PLANNING matching any of the added groups
+    if distinct_types_added:
+        alloc_svc = AllocationService(db)
+        type_filters = [
+            and_(
+                BloodRequest.required_blood_group == bg,
+                BloodRequest.component_type == comp,
+            )
+            for bg, comp in distinct_types_added
+        ]
+        replan_requests_res = await db.execute(
+            select(BloodRequest).where(
+                and_(
+                    BloodRequest.status == RequestStatus.RE_PLANNING,
+                    or_(*type_filters),
+                )
+            )
+        )
+        for req in replan_requests_res.scalars().all():
+            await alloc_svc.replan_request(
+                req.id,
+                trigger_reason=f"Batch inventory addition: {len(units_to_add)} packet(s) logged into stock",
+            )
+
+    return [InventoryUnitOut.model_validate(u) for u in units_to_add]
 
 
 @router.patch("/units/{id}/status", response_model=InventoryUnitOut)

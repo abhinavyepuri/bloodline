@@ -148,9 +148,6 @@ async def get_active_emergency_alerts(
     Redis is the source of truth, so the dashboard can never offer a donor a request
     that ``/respond`` would then refuse.
     """
-    if not donor.is_available:
-        return []
-
     req_res = await db.execute(
         select(BloodRequest)
         .options(selectinload(BloodRequest.allocations), selectinload(BloodRequest.hospital))
@@ -158,6 +155,7 @@ async def get_active_emergency_alerts(
             BloodRequest.status.in_([
                 RequestStatus.PROXIMITY_ZONE_NOTIFIED,
                 RequestStatus.RE_PLANNING,
+                RequestStatus.PENDING_EVALUATION,
             ])
         )
         .order_by(BloodRequest.calculated_urgency_score.desc())
@@ -247,6 +245,7 @@ async def respond_to_active_alert_contextual(
         request_id=target_request_id,
         donor_id=donor.id,
         action=resp.action,
+        bags_offered=resp.bags_offered or 1,
     )
     background_tasks.add_task(NotificationQueueService.process_next_batch, 20)
     return DonorRespondOut.model_validate(result)
@@ -267,6 +266,7 @@ async def respond_to_emergency_dispatch(
         request_id=id,
         donor_id=donor.id,
         action=resp.action,
+        bags_offered=resp.bags_offered or 1,
     )
     background_tasks.add_task(NotificationQueueService.process_next_batch, 20)
     return DonorRespondOut.model_validate(result)

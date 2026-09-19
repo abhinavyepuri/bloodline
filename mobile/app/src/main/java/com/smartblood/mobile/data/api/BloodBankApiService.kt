@@ -18,18 +18,21 @@ interface BloodBankApiService {
     suspend fun getDonorProfile(): Response<DonorProfile>
 
     @PATCH("donors/availability")
-    suspend fun updateAvailability(@Body body: Map<String, Boolean>): Response<DonorProfile>
+    suspend fun updateAvailability(@Body body: Map<String, @JvmSuppressWildcards Any>): Response<DonorProfile>
 
     @POST("donors/me/telemetry")
-    suspend fun updateLocation(@Body telemetry: Map<String, Double>): Response<Unit>
+    suspend fun updateLocation(@Body telemetry: Map<String, @JvmSuppressWildcards Any>): Response<DonorTelemetryOut>
 
     @POST("donors/me/heartbeat")
-    suspend fun sendHeartbeat(@Body coordinates: Map<String, Double>): Response<DonorProfile>
+    suspend fun sendHeartbeat(@Body coordinates: Map<String, @JvmSuppressWildcards Any>): Response<DonorProfile>
 
     // Active Emergency Requests & Responses
     @GET("donors/requests/active")
     suspend fun getActiveRequests(): Response<List<BloodRequestItem>>
 
     @POST("donors/respond")
-    suspend fun acceptEmergencyDispatch(@Body payload: AcceptDispatchPayload): Response<Map<String, Any>>
+    suspend fun acceptEmergencyDispatch(@Body payload: AcceptDispatchPayload): Response<DonorRespondResult>
+
+    @POST("donors/requests/{id}/respond")
+    suspend fun respondToRequestAlert(@Path("id") id: String, @Body payload: AcceptDispatchPayload): Response<DonorRespondResult>
 }

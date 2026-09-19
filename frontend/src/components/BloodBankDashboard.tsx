@@ -8,7 +8,22 @@ import {
   BloodRequest,
   DonorPublic,
 } from '../types';
-import { Droplet, Plus, RefreshCw, AlertTriangle, Building2, Truck, CheckCircle2, Clock, Activity } from 'lucide-react';
+import {
+  Droplet,
+  Plus,
+  RefreshCw,
+  AlertTriangle,
+  Building2,
+  Truck,
+  CheckCircle2,
+  Clock,
+  Activity,
+  Layers,
+  Trash2,
+  Sparkles,
+  Check,
+  Package,
+} from 'lucide-react';
 
 interface HospitalOrder {
   request_id: string;
@@ -32,8 +47,22 @@ interface HospitalOrder {
   }[];
 }
 
-/** Volume logged for a newly registered bag; the form no longer keeps dead state for it. */
-const DEFAULT_UNIT_VOLUME_ML = 300;
+interface MultiRowItem {
+  id: string;
+  blood_group: string;
+  component_type: BloodComponentType;
+  quantity: number;
+  volume_ml: number;
+  expiry_days: number;
+}
+
+const DEFAULT_EXPIRY_BY_COMPONENT: Record<BloodComponentType, number> = {
+  PRBC: 42,
+  WHOLE_BLOOD: 35,
+  PLATELETS: 5,
+  FFP: 365,
+  CRYOPRECIPITATE: 365,
+};
 
 export const BloodBankDashboard: React.FC = () => {
   const { lastEvent } = useWebSocket();
@@ -44,13 +73,32 @@ export const BloodBankDashboard: React.FC = () => {
   const [activeDonors, setActiveDonors] = useState<DonorPublic[]>([]);
   const [loading, setLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [modalTab, setModalTab] = useState<'BATCH_GENERATOR' | 'MULTI_ROW' | 'SINGLE'>('BATCH_GENERATOR');
+  const [submitting, setSubmitting] = useState(false);
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // New unit form
+  // Single unit form
   const [newBatch, setNewBatch] = useState('');
   const [newBloodGroup, setNewBloodGroup] = useState('O-');
   const [newComponent, setNewComponent] = useState<BloodComponentType>('PRBC');
   const [newExpiryDays, setNewExpiryDays] = useState(42);
+  const [newVolume, setNewVolume] = useState(450);
+
+  // Quick Batch Generator form
+  const [batchBloodGroup, setBatchBloodGroup] = useState('O-');
+  const [batchComponent, setBatchComponent] = useState<BloodComponentType>('PRBC');
+  const [batchQuantity, setBatchQuantity] = useState(5);
+  const [batchPrefix, setBatchPrefix] = useState('BB-DRIVE-');
+  const [batchVolume, setBatchVolume] = useState(450);
+  const [batchExpiryDays, setBatchExpiryDays] = useState(42);
+
+  // Multi-Row Table form
+  const [multiRows, setMultiRows] = useState<MultiRowItem[]>([
+    { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
+    { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 6, volume_ml: 450, expiry_days: 42 },
+    { id: '3', blood_group: 'A+', component_type: 'PLATELETS', quantity: 3, volume_ml: 300, expiry_days: 5 },
+  ]);
 
   const fetchInventoryAndOrders = useCallback(async () => {
     setLoading(true);
@@ -116,8 +164,10 @@ export const BloodBankDashboard: React.FC = () => {
     }
   };
 
-  const handleAddUnit = async (e: React.FormEvent) => {
+  // Add single unit
+  const handleAddSingleUnit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitting(true);
     const now = new Date();
     const expiry = new Date(Date.now() + newExpiryDays * 24 * 3600 * 1000);
 
@@ -126,17 +176,141 @@ export const BloodBankDashboard: React.FC = () => {
         batch_number: newBatch || `BB-${Math.floor(1000 + Math.random() * 9000)}`,
         blood_group: newBloodGroup,
         component_type: newComponent,
-        volume_ml: DEFAULT_UNIT_VOLUME_ML,
+        volume_ml: newVolume,
         collection_date: now.toISOString(),
         expiry_date: expiry.toISOString(),
       });
       setShowAddModal(false);
       setNewBatch('');
+      setStatusMessage({ type: 'success', text: `Successfully registered 1 unit of ${newBloodGroup} (${newComponent})!` });
+      setTimeout(() => setStatusMessage(null), 5000);
       await fetchInventoryAndOrders();
     } catch (err) {
       alert('Error registering blood unit: ' + (err instanceof Error ? err.message : err));
+    } finally {
+      setSubmitting(false);
     }
   };
+
+  // Batch generator submit
+  const handleBatchGeneratorSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const res = await api.post<InventoryUnit[]>('/inventory/batch', {
+        blood_group: batchBloodGroup,
+        component_type: batchComponent,
+        quantity: batchQuantity,
+        batch_prefix: batchPrefix.trim() || undefined,
+        volume_ml: batchVolume,
+        expiry_days: batchExpiryDays,
+      });
+      setShowAddModal(false);
+      setStatusMessage({
+        type: 'success',
+        text: `Successfully batch added ${res.length} packets of ${batchBloodGroup} (${batchComponent}) into storage!`,
+      });
+      setTimeout(() => setStatusMessage(null), 5000);
+      await fetchInventoryAndOrders();
+    } catch (err) {
+      alert('Error batch registering blood units: ' + (err instanceof Error ? err.message : err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Multi-row submit
+  const handleMultiRowSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (multiRows.length === 0) {
+      alert('Please add at least one row.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const items = multiRows.map((r) => ({
+        blood_group: r.blood_group,
+        component_type: r.component_type,
+        quantity: r.quantity,
+        volume_ml: r.volume_ml,
+        expiry_days: r.expiry_days,
+      }));
+      const res = await api.post<InventoryUnit[]>('/inventory/batch', { items });
+      setShowAddModal(false);
+      const totalBags = multiRows.reduce((sum, r) => sum + r.quantity, 0);
+      setStatusMessage({
+        type: 'success',
+        text: `Successfully registered ${res.length} blood packets across ${multiRows.length} blood type categories!`,
+      });
+      setTimeout(() => setStatusMessage(null), 5000);
+      await fetchInventoryAndOrders();
+    } catch (err) {
+      alert('Error registering batch rows: ' + (err instanceof Error ? err.message : err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Helper to add row in multi-row table
+  const addMultiRow = () => {
+    setMultiRows((prev) => [
+      ...prev,
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        blood_group: 'O+',
+        component_type: 'PRBC',
+        quantity: 5,
+        volume_ml: 450,
+        expiry_days: 42,
+      },
+    ]);
+  };
+
+  const removeMultiRow = (id: string) => {
+    setMultiRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const updateMultiRow = (id: string, field: keyof MultiRowItem, value: any) => {
+    setMultiRows((prev) =>
+      prev.map((r) => {
+        if (r.id === id) {
+          const updated = { ...r, [field]: value };
+          if (field === 'component_type') {
+            updated.expiry_days = DEFAULT_EXPIRY_BY_COMPONENT[value as BloodComponentType] || 42;
+          }
+          return updated;
+        }
+        return r;
+      })
+    );
+  };
+
+  const loadPreset = (presetName: 'DRIVE' | 'TRAUMA' | 'PLATELETS') => {
+    if (presetName === 'DRIVE') {
+      setMultiRows([
+        { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
+        { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 8, volume_ml: 450, expiry_days: 42 },
+        { id: '3', blood_group: 'A+', component_type: 'PRBC', quantity: 6, volume_ml: 450, expiry_days: 42 },
+        { id: '4', blood_group: 'B+', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
+        { id: '5', blood_group: 'AB+', component_type: 'FFP', quantity: 2, volume_ml: 250, expiry_days: 365 },
+      ]);
+    } else if (presetName === 'TRAUMA') {
+      setMultiRows([
+        { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 10, volume_ml: 450, expiry_days: 42 },
+        { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 10, volume_ml: 450, expiry_days: 42 },
+        { id: '3', blood_group: 'AB-', component_type: 'FFP', quantity: 5, volume_ml: 250, expiry_days: 365 },
+      ]);
+    } else if (presetName === 'PLATELETS') {
+      setMultiRows([
+        { id: '1', blood_group: 'O+', component_type: 'PLATELETS', quantity: 4, volume_ml: 300, expiry_days: 5 },
+        { id: '2', blood_group: 'A+', component_type: 'PLATELETS', quantity: 4, volume_ml: 300, expiry_days: 5 },
+        { id: '3', blood_group: 'B+', component_type: 'PLATELETS', quantity: 2, volume_ml: 300, expiry_days: 5 },
+      ]);
+    }
+  };
+
+  const totalMultiRowBags = multiRows.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+
 
   const availableCount = units.filter((u) => u.status === 'AVAILABLE').length;
   const lockedCount = units.filter((u) => u.status === 'LOCKED_RESERVE').length;
@@ -164,6 +338,45 @@ export const BloodBankDashboard: React.FC = () => {
 
   return (
     <div>
+      {/* Toast / Status Alert Banner */}
+      {statusMessage && (
+        <div
+          style={{
+            background: statusMessage.type === 'success' ? 'rgba(22, 163, 74, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+            border: `1px solid ${statusMessage.type === 'success' ? 'rgba(22, 163, 74, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+            borderRadius: '10px',
+            padding: '0.85rem 1.25rem',
+            marginBottom: '1.25rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.85rem',
+            color: statusMessage.type === 'success' ? 'var(--emerald-400)' : 'var(--crimson-500)',
+            fontSize: '0.9rem',
+            fontWeight: 600,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            {statusMessage.type === 'success' ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}
+            <span>{statusMessage.text}</span>
+          </div>
+          <button
+            onClick={() => setStatusMessage(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'inherit',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              padding: '0.2rem',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Informative Flow Notice */}
       <div style={{
         background: 'rgba(6, 182, 212, 0.1)',
@@ -179,12 +392,12 @@ export const BloodBankDashboard: React.FC = () => {
       }}>
         <Building2 size={24} style={{ flexShrink: 0, color: 'var(--cyan-400)' }} />
         <div>
-          <b>Hospital-to-Blood-Bank Pipeline:</b> Emergency requests created by <b>Hospital Admin</b> are automatically matched against this blood bank's stock. You can review incoming hospital orders, inspect locked cold-chain units, and confirm dispatch to the ambulance.
+          <b>Hospital-to-Blood-Bank Pipeline:</b> Emergency requests created by <b>Hospital Admin</b> are automatically matched against this blood bank's stock. You can batch add packets in bulk, review incoming hospital orders, inspect locked cold-chain units, and confirm dispatch to the ambulance.
         </div>
       </div>
 
       {/* Top Stat Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="glass-panel">
           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>READY ON SHELVES</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--emerald-400)', marginTop: '0.25rem' }}>
@@ -206,15 +419,30 @@ export const BloodBankDashboard: React.FC = () => {
           </div>
         </div>
 
-        <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', justifyContent: 'center' }}>
+          <button
+            id="btn-batch-add"
+            onClick={() => {
+              setModalTab('BATCH_GENERATOR');
+              setShowAddModal(true);
+            }}
+            className="btn btn-cyan"
+            style={{ width: '100%', padding: '0.55rem 0.85rem', fontWeight: 700 }}
+          >
+            <Layers size={16} />
+            + Batch Add Packets
+          </button>
           <button
             id="btn-add-unit"
-            onClick={() => setShowAddModal(true)}
-            className="btn btn-cyan"
-            style={{ width: '100%', height: '100%' }}
+            onClick={() => {
+              setModalTab('SINGLE');
+              setShowAddModal(true);
+            }}
+            className="btn btn-secondary"
+            style={{ width: '100%', fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}
           >
-            <Plus size={16} />
-            + Add New Blood Bag
+            <Plus size={14} />
+            + Single Unit Entry
           </button>
         </div>
       </div>
@@ -248,8 +476,6 @@ export const BloodBankDashboard: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {orders.map((order) => {
               const hasReservedUnits = order.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE');
-              // `[].every()` is true, so an order with no allocated units would claim
-              // to be fully dispatched. Require at least one unit.
               const allDispatched =
                 order.allocated_units.length > 0 &&
                 order.allocated_units.every((u) => u.unit_status === 'DISPATCHED');
@@ -476,14 +702,30 @@ export const BloodBankDashboard: React.FC = () => {
       {/* Inventory Stock Table */}
       <div className="glass-panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <h2 style={{ fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Droplet size={20} color="var(--crimson-500)" />
-            All Blood Bags in Cold Storage
-          </h2>
-          <button onClick={fetchInventoryAndOrders} className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>
-            <RefreshCw size={14} className={loading ? 'spin' : ''} />
-            Refresh
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <h2 style={{ fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Droplet size={20} color="var(--crimson-500)" />
+              All Blood Bags in Cold Storage
+            </h2>
+            <span className="badge badge-cyan">{units.length} Total Units</span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              onClick={() => {
+                setModalTab('BATCH_GENERATOR');
+                setShowAddModal(true);
+              }}
+              className="btn btn-cyan"
+              style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+            >
+              <Layers size={14} />
+              + Batch Add
+            </button>
+            <button onClick={fetchInventoryAndOrders} className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>
+              <RefreshCw size={14} className={loading ? 'spin' : ''} />
+              Refresh
+            </button>
+          </div>
         </div>
 
         <div style={{ overflowX: 'auto' }}>
@@ -573,7 +815,7 @@ export const BloodBankDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Add Unit Modal */}
+      {/* Modern Batch & Single Blood Packets Modal */}
       {showAddModal && (
         <div style={{
           position: 'fixed',
@@ -581,79 +823,546 @@ export const BloodBankDashboard: React.FC = () => {
           left: 0,
           right: 0,
           bottom: 0,
-          background: 'rgba(0, 0, 0, 0.5)',
+          background: 'rgba(0, 0, 0, 0.65)',
           backdropFilter: 'blur(8px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 100,
+          zIndex: 1000,
           padding: '1rem',
         }}>
-          <div className="glass-panel" style={{ maxWidth: '480px', width: '100%' }}>
-            <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '1rem' }}>Log New Verified Blood Unit</h3>
-            <form onSubmit={handleAddUnit} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          <div
+            className="glass-panel"
+            style={{
+              maxWidth: modalTab === 'MULTI_ROW' ? '740px' : '560px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              background: 'var(--color-surface)',
+              border: '1px solid var(--border-subtle)',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.25)',
+              borderRadius: '14px',
+              padding: '1.5rem',
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <div>
-                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Batch Number (optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. BB-005"
-                  className="input-field"
-                  value={newBatch}
-                  onChange={(e) => setNewBatch(e.target.value)}
-                />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div>
-                  <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Blood Group</label>
-                  <select
-                    className="select-field"
-                    value={newBloodGroup}
-                    onChange={(e) => setNewBloodGroup(e.target.value)}
-                  >
-                    {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
-                      <option key={bg} value={bg}>{bg}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Component Type</label>
-                  <select
-                    className="select-field"
-                    value={newComponent}
-                    onChange={(e) => setNewComponent(e.target.value as BloodComponentType)}
-                  >
-                    <option value="PRBC">PRBC</option>
-                    <option value="WHOLE_BLOOD">Whole Blood</option>
-                    <option value="PLATELETS">Platelets</option>
-                    <option value="FFP">FFP</option>
-                    <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
-                  </select>
+                <h3 style={{ fontSize: '1.3rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Package size={22} color="var(--cyan-400)" />
+                  Add Blood Packets to Inventory
+                </h3>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                  Register cold-chain units into active storage. Batch additions trigger immediate re-planning for pending hospital requests.
                 </div>
               </div>
-              <div>
-                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Shelf Life (Days)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="365"
-                  className="input-field"
-                  value={newExpiryDays}
-                  onChange={(e) => setNewExpiryDays(Number(e.target.value))}
-                />
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="btn btn-secondary"
+                style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+              >
+                ✕
+              </button>
+            </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem' }}>
-                <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-secondary">
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-cyan">
-                  Register Unit
-                </button>
-              </div>
-            </form>
+            {/* Mode Tabs */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '0.5rem',
+              background: 'var(--color-bg)',
+              padding: '0.35rem',
+              borderRadius: '8px',
+              marginBottom: '1.25rem',
+            }}>
+              <button
+                type="button"
+                id="tab-batch-gen"
+                onClick={() => setModalTab('BATCH_GENERATOR')}
+                style={{
+                  padding: '0.55rem 0.5rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem',
+                  background: modalTab === 'BATCH_GENERATOR' ? 'var(--cyan-500)' : 'transparent',
+                  color: modalTab === 'BATCH_GENERATOR' ? '#fff' : 'var(--text-muted)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Layers size={14} />
+                Quick Batch (Qty)
+              </button>
+              <button
+                type="button"
+                id="tab-multi-row"
+                onClick={() => setModalTab('MULTI_ROW')}
+                style={{
+                  padding: '0.55rem 0.5rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem',
+                  background: modalTab === 'MULTI_ROW' ? 'var(--cyan-500)' : 'transparent',
+                  color: modalTab === 'MULTI_ROW' ? '#fff' : 'var(--text-muted)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Sparkles size={14} />
+                Multi-Type Batch
+              </button>
+              <button
+                type="button"
+                id="tab-single"
+                onClick={() => setModalTab('SINGLE')}
+                style={{
+                  padding: '0.55rem 0.5rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem',
+                  background: modalTab === 'SINGLE' ? 'var(--cyan-500)' : 'transparent',
+                  color: modalTab === 'SINGLE' ? '#fff' : 'var(--text-muted)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Plus size={14} />
+                Single Packet
+              </button>
+            </div>
+
+            {/* TAB 1: Quick Batch Generator */}
+            {modalTab === 'BATCH_GENERATOR' && (
+              <form onSubmit={handleBatchGeneratorSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{
+                  background: 'rgba(6, 182, 212, 0.08)',
+                  border: '1px solid rgba(6, 182, 212, 0.25)',
+                  borderRadius: '8px',
+                  padding: '0.75rem 1rem',
+                  fontSize: '0.8rem',
+                  color: 'var(--color-info)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                }}>
+                  <Layers size={16} />
+                  <span>Batch log multiple identical blood packets with sequential barcode generation.</span>
+                </div>
+
+                {/* Quantity with quick buttons */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                      Quantity of Bags to Add *
+                    </label>
+                    <span className="badge badge-cyan" style={{ fontSize: '0.75rem', fontWeight: 800 }}>
+                      {batchQuantity} Bags
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      id="input-batch-quantity"
+                      type="number"
+                      min="1"
+                      max="100"
+                      className="input-field"
+                      value={batchQuantity}
+                      onChange={(e) => setBatchQuantity(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+                      style={{ maxWidth: '120px', fontWeight: 800, fontSize: '1.1rem' }}
+                      required
+                    />
+                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                      {[1, 5, 10, 20, 50].map((qty) => (
+                        <button
+                          key={qty}
+                          type="button"
+                          onClick={() => setBatchQuantity(qty)}
+                          className="btn btn-secondary"
+                          style={{
+                            padding: '0.3rem 0.6rem',
+                            fontSize: '0.75rem',
+                            fontWeight: batchQuantity === qty ? 800 : 500,
+                            borderColor: batchQuantity === qty ? 'var(--cyan-400)' : 'var(--border-subtle)',
+                            color: batchQuantity === qty ? 'var(--cyan-400)' : 'var(--text-muted)',
+                          }}
+                        >
+                          +{qty}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Blood Group</label>
+                    <select
+                      id="select-batch-blood-group"
+                      className="select-field"
+                      value={batchBloodGroup}
+                      onChange={(e) => setBatchBloodGroup(e.target.value)}
+                    >
+                      {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
+                        <option key={bg} value={bg}>{bg}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Component Type</label>
+                    <select
+                      id="select-batch-component"
+                      className="select-field"
+                      value={batchComponent}
+                      onChange={(e) => {
+                        const comp = e.target.value as BloodComponentType;
+                        setBatchComponent(comp);
+                        setBatchExpiryDays(DEFAULT_EXPIRY_BY_COMPONENT[comp] || 42);
+                      }}
+                    >
+                      <option value="PRBC">PRBC (Packed Red Blood Cells)</option>
+                      <option value="WHOLE_BLOOD">Whole Blood</option>
+                      <option value="PLATELETS">Platelets</option>
+                      <option value="FFP">Fresh Frozen Plasma (FFP)</option>
+                      <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Batch Code Prefix</label>
+                    <input
+                      id="input-batch-prefix"
+                      type="text"
+                      placeholder="e.g. BB-DRIVE-"
+                      className="input-field"
+                      value={batchPrefix}
+                      onChange={(e) => setBatchPrefix(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Volume (mL)</label>
+                    <input
+                      type="number"
+                      min="50"
+                      max="1000"
+                      className="input-field"
+                      value={batchVolume}
+                      onChange={(e) => setBatchVolume(Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Shelf Life (Days)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="365"
+                      className="input-field"
+                      value={batchExpiryDays}
+                      onChange={(e) => setBatchExpiryDays(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                {/* Batch preview */}
+                <div style={{
+                  background: 'var(--color-bg)',
+                  border: '1px dashed var(--border-subtle)',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  fontSize: '0.8rem',
+                }}>
+                  <div style={{ color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.35rem' }}>
+                    Summary Preview:
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)', fontWeight: 700 }}>
+                    <span>{batchQuantity}x {batchBloodGroup} ({batchComponent}) @ {batchVolume} mL</span>
+                    <span>Total: {(batchQuantity * batchVolume).toLocaleString()} mL</span>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.35rem' }}>
+                    Codes: <code>{batchPrefix.trim() || 'BB-'}001</code> ... <code>{batchPrefix.trim() || 'BB-'}{batchQuantity < 10 ? `00${batchQuantity}` : `0${batchQuantity}`}</code> (expires in {batchExpiryDays} days)
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                  <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-secondary">
+                    Cancel
+                  </button>
+                  <button
+                    id="btn-submit-batch-gen"
+                    type="submit"
+                    disabled={submitting}
+                    className="btn btn-cyan"
+                    style={{ fontWeight: 800, padding: '0.55rem 1.25rem' }}
+                  >
+                    {submitting ? 'Registering Batch...' : `+ Batch Register ${batchQuantity} Blood Packets`}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* TAB 2: Multi-Type Donation Drive Table */}
+            {modalTab === 'MULTI_ROW' && (
+              <form onSubmit={handleMultiRowSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Add multiple blood types and quantities from donation drives or incoming shipments at once.
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => loadPreset('DRIVE')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      title="Load standard community drive distribution"
+                    >
+                      Drive Preset (24 Bags)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => loadPreset('TRAUMA')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      title="Load high emergency trauma stock"
+                    >
+                      Trauma Stock (25 Bags)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Rows Table */}
+                <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                    <thead>
+                      <tr style={{ background: 'var(--color-bg)', borderBottom: '1px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '0.5rem 0.6rem' }}>BLOOD GROUP</th>
+                        <th style={{ padding: '0.5rem 0.6rem' }}>COMPONENT</th>
+                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>QTY</th>
+                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>VOL (mL)</th>
+                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>SHELF (d)</th>
+                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', width: '45px' }}>DEL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {multiRows.map((row) => (
+                        <tr key={row.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <select
+                              className="select-field"
+                              value={row.blood_group}
+                              onChange={(e) => updateMultiRow(row.id, 'blood_group', e.target.value)}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                            >
+                              {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
+                                <option key={bg} value={bg}>{bg}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <select
+                              className="select-field"
+                              value={row.component_type}
+                              onChange={(e) => updateMultiRow(row.id, 'component_type', e.target.value as BloodComponentType)}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                            >
+                              <option value="PRBC">PRBC</option>
+                              <option value="WHOLE_BLOOD">Whole Blood</option>
+                              <option value="PLATELETS">Platelets</option>
+                              <option value="FFP">FFP</option>
+                              <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                            </select>
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <input
+                              type="number"
+                              min="1"
+                              max="100"
+                              className="input-field"
+                              value={row.quantity}
+                              onChange={(e) => updateMultiRow(row.id, 'quantity', Math.max(1, Number(e.target.value) || 1))}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
+                            />
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <input
+                              type="number"
+                              min="50"
+                              max="1000"
+                              className="input-field"
+                              value={row.volume_ml}
+                              onChange={(e) => updateMultiRow(row.id, 'volume_ml', Number(e.target.value) || 450)}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                            />
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <input
+                              type="number"
+                              min="1"
+                              max="365"
+                              className="input-field"
+                              value={row.expiry_days}
+                              onChange={(e) => updateMultiRow(row.id, 'expiry_days', Number(e.target.value) || 42)}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                            />
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem', textAlign: 'center' }}>
+                            {multiRows.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeMultiRow(row.id)}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--crimson-500)',
+                                  cursor: 'pointer',
+                                  padding: '0.2rem',
+                                }}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={addMultiRow}
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                  >
+                    <Plus size={14} />
+                    + Add Blood Type Row
+                  </button>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                    Total Packets to Add: <span style={{ color: 'var(--cyan-400)', fontSize: '1.1rem' }}>{totalMultiRowBags} Bags</span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                  <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-secondary">
+                    Cancel
+                  </button>
+                  <button
+                    id="btn-submit-multi-row"
+                    type="submit"
+                    disabled={submitting || totalMultiRowBags === 0}
+                    className="btn btn-cyan"
+                    style={{ fontWeight: 800, padding: '0.55rem 1.25rem' }}
+                  >
+                    {submitting ? 'Registering...' : `+ Batch Register All ${totalMultiRowBags} Packets`}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* TAB 3: Single Unit Form */}
+            {modalTab === 'SINGLE' && (
+              <form onSubmit={handleAddSingleUnit} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Custom Barcode / Batch Number (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. BB-005"
+                    className="input-field"
+                    value={newBatch}
+                    onChange={(e) => setNewBatch(e.target.value)}
+                  />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Blood Group</label>
+                    <select
+                      className="select-field"
+                      value={newBloodGroup}
+                      onChange={(e) => setNewBloodGroup(e.target.value)}
+                    >
+                      {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
+                        <option key={bg} value={bg}>{bg}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Component Type</label>
+                    <select
+                      className="select-field"
+                      value={newComponent}
+                      onChange={(e) => {
+                        const comp = e.target.value as BloodComponentType;
+                        setNewComponent(comp);
+                        setNewExpiryDays(DEFAULT_EXPIRY_BY_COMPONENT[comp] || 42);
+                      }}
+                    >
+                      <option value="PRBC">PRBC</option>
+                      <option value="WHOLE_BLOOD">Whole Blood</option>
+                      <option value="PLATELETS">Platelets</option>
+                      <option value="FFP">FFP</option>
+                      <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Volume (mL)</label>
+                    <input
+                      type="number"
+                      min="50"
+                      max="1000"
+                      className="input-field"
+                      value={newVolume}
+                      onChange={(e) => setNewVolume(Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Shelf Life (Days)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="365"
+                      className="input-field"
+                      value={newExpiryDays}
+                      onChange={(e) => setNewExpiryDays(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem' }}>
+                  <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-secondary">
+                    Cancel
+                  </button>
+                  <button type="submit" disabled={submitting} className="btn btn-cyan">
+                    {submitting ? 'Registering...' : 'Register Single Unit'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
     </div>
   );
 };
+
