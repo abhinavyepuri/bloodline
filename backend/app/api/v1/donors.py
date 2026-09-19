@@ -295,9 +295,6 @@ async def get_active_emergency_alerts(
     Redis is the source of truth, so the dashboard can never offer a donor a request
     that ``/respond`` would then refuse.
     """
-    if not donor.is_available or not is_donor_eligible(donor):
-        return []
-
     req_res = await db.execute(
         select(BloodRequest)
         .options(selectinload(BloodRequest.allocations), selectinload(BloodRequest.hospital))
@@ -305,6 +302,7 @@ async def get_active_emergency_alerts(
             BloodRequest.status.in_([
                 RequestStatus.PROXIMITY_ZONE_NOTIFIED,
                 RequestStatus.RE_PLANNING,
+                RequestStatus.PENDING_EVALUATION,
             ])
         )
         .order_by(BloodRequest.calculated_urgency_score.desc())

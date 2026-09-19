@@ -34,6 +34,10 @@ class BloodRequestCreate(BaseModel):
             "always request on behalf of their own facility."
         ),
     )
+    fulfillment_mode: Optional[str] = Field(
+        default="AUTO",
+        description="Fulfillment strategy: 'AUTO' (inventory first) or 'DIRECT_DONOR' (alert live donors immediately)",
+    )
 
     model_config = ConfigDict(
         extra="forbid",

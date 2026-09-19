@@ -7,8 +7,8 @@ import {
   DonorPublic,
   AllocationAuditLog,
   TriageLevel,
-  AdminOverview,
-  AdminMetrics,
+  TransferRecommendation,
+  PredictionSummary,
 } from '../types';
 import {
   Radio,
@@ -23,6 +23,12 @@ import {
   Building2,
   X,
   Send,
+  Sparkles,
+  Truck,
+  ArrowRight,
+  TrendingUp,
+  MapPin,
+  CheckCircle2,
 } from 'lucide-react';
 
 const TRIAGE_CONFIG: Record<TriageLevel, { label: string; color: string; bg: string }> = {
@@ -57,6 +63,13 @@ export const CoordinatorDashboard: React.FC = () => {
   const [auditLogs, setAuditLogs] = useState<AllocationAuditLog[]>([]);
   const [donors, setDonors] = useState<DonorPublic[]>([]);
   const [inventory, setInventory] = useState<InventoryUnit[]>([]);
+  const [transfers, setTransfers] = useState<TransferRecommendation[]>([]);
+  const [mlSummary, setMlSummary] = useState<PredictionSummary | null>(null);
+
+  // Simulation State
+  const [simMultiplier, setSimMultiplier] = useState<number>(1.2);
+  const [simRunning, setSimRunning] = useState<boolean>(false);
+  const [simOutput, setSimOutput] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,16 +83,23 @@ export const CoordinatorDashboard: React.FC = () => {
   const [overrideReason, setOverrideReason] = useState<string>('');
   const [overriding, setOverriding] = useState<boolean>(false);
 
+  // Pagination state
+  const PAGE_SIZE = 5;
+  const [reqsPage, setReqsPage] = useState(1);
+  const [transfersPage, setTransfersPage] = useState(1);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [reqsData, overviewData, metricsData, logsData, donorsData, invData] = await Promise.all([
+      const [reqsData, overviewData, metricsData, logsData, donorsData, invData, transfersData, summaryData] = await Promise.all([
         api.get<BloodRequest[]>('/requests'),
         api.get<AdminOverview>('/admin/overview').catch(() => null),
         api.get<AdminMetrics>('/admin/metrics').catch(() => null),
         api.get<AllocationAuditLog[]>('/audit/logs').catch(() => []),
         api.get<DonorPublic[]>('/donors').catch(() => []),
         api.get<InventoryUnit[]>('/inventory').catch(() => []),
+        api.get<TransferRecommendation[]>('/predictions/transfers').catch(() => []),
+        api.get<PredictionSummary>('/predictions/summary').catch(() => null),
       ]);
 
       setRequests(reqsData);
@@ -88,6 +108,8 @@ export const CoordinatorDashboard: React.FC = () => {
       setAuditLogs(logsData);
       setDonors(donorsData);
       setInventory(invData);
+      setTransfers(transfersData);
+      setMlSummary(summaryData);
       setError(null);
     } catch (err) {
       console.error('Failed to fetch coordinator data:', err);
@@ -96,6 +118,21 @@ export const CoordinatorDashboard: React.FC = () => {
       setLoading(false);
     }
   }, []);
+
+  const handleRunSimulation = async () => {
+    setSimRunning(true);
+    setSimOutput(null);
+    try {
+      const res = await api.post<{ summary_impact: string }>('/predictions/simulate', {
+        demand_multiplier: simMultiplier,
+      });
+      setSimOutput(res.summary_impact);
+    } catch (err) {
+      alert('Simulation error: ' + (err instanceof Error ? err.message : err));
+    } finally {
+      setSimRunning(false);
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -204,6 +241,170 @@ export const CoordinatorDashboard: React.FC = () => {
             From clinical intake to resource hard-lock
           </div>
         </div>
+
+        {/* AI Decision Support Telemetry */}
+        <div className="glass-panel" style={{ padding: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>AI Transfer Rebalancing</span>
+            <Sparkles size={18} color="var(--color-info)" />
+          </div>
+          <div style={{ fontSize: '1.75rem', fontWeight: 800, marginTop: '0.4rem', color: 'var(--color-info)' }}>
+            {mlSummary?.active_transfer_recommendations_count ?? transfers.length}
+          </div>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
+            Inter-facility routes to prevent spoilage
+          </div>
+        </div>
+
+        <div className="glass-panel" style={{ padding: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>Critical Shortages (D+1)</span>
+            <Shield size={18} color="var(--crimson-500)" />
+          </div>
+          <div style={{ fontSize: '1.75rem', fontWeight: 800, marginTop: '0.4rem', color: 'var(--crimson-500)' }}>
+            {mlSummary?.critical_shortage_count ?? 0}
+          </div>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
+            Series where stock &lt; next-day demand
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION: AI Network Rebalancing & What-If Stress Simulation */}
+      <div className="glass-panel" style={{ marginBottom: '1.75rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <Truck size={22} color="var(--color-info)" />
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)', margin: 0 }}>
+                AI Inter-Facility Network Rebalancing
+              </h2>
+              <span className="badge badge-purple">
+                {transfers.length} Actionable Recommendations
+              </span>
+            </div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              Conservative algorithmic matching: Donors with wastage risk (&ge;50%) paired with facilities facing deficits.
+              <span style={{ color: 'var(--color-success)', fontWeight: 600, marginLeft: '0.5rem' }}>● Advisory Only (Requires Coordinator Confirmation)</span>
+            </div>
+          </div>
+
+          {/* What-if simulation launcher */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', background: 'var(--color-bg)', padding: '0.4rem 0.75rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>Stress Simulation:</span>
+            {[
+              { label: '+20%', mult: 1.2 },
+              { label: '+50%', mult: 1.5 },
+              { label: '2.0x', mult: 2.0 },
+            ].map((s) => (
+              <button
+                key={s.label}
+                onClick={() => setSimMultiplier(s.mult)}
+                className={`btn ${simMultiplier === s.mult ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem' }}
+              >
+                {s.label}
+              </button>
+            ))}
+            <button
+              onClick={handleRunSimulation}
+              disabled={simRunning}
+              className="btn btn-cyan"
+              style={{ fontSize: '0.75rem', padding: '0.3rem 0.7rem' }}
+            >
+              <TrendingUp size={13} className={simRunning ? 'spin' : ''} />
+              {simRunning ? 'Running...' : 'Run Simulation'}
+            </button>
+          </div>
+        </div>
+
+        {/* Simulation Output Banner */}
+        {simOutput && (
+          <div style={{
+            background: '#EFF6FF',
+            border: '1px solid #BFDBFE',
+            borderRadius: '8px',
+            padding: '0.85rem 1rem',
+            marginBottom: '1.25rem',
+            fontSize: '0.85rem',
+            color: '#1E40AF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <TrendingUp size={18} style={{ color: '#2563EB', flexShrink: 0 }} />
+              <span><b>What-If Stress Scenario ({Math.round((simMultiplier - 1) * 100)}% Surge):</b> {simOutput}</span>
+            </div>
+            <button onClick={() => setSimOutput(null)} style={{ background: 'transparent', border: 'none', color: '#1E40AF', cursor: 'pointer' }}>
+              <X size={15} />
+            </button>
+          </div>
+        )}
+
+        {/* Transfer Recommendations Table */}
+        {transfers.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', background: 'var(--color-bg)', borderRadius: '8px', border: '1px dashed var(--border-subtle)' }}>
+            <CheckCircle2 size={24} style={{ color: 'var(--color-success)', marginBottom: '0.5rem' }} />
+            <div>All facilities currently balanced. No inter-bank transfers required at this time.</div>
+          </div>
+        ) : (
+          (() => {
+            const totalT = transfers.length;
+            const visibleT = transfers.slice(0, transfersPage * PAGE_SIZE);
+            const hasMoreT = totalT > visibleT.length;
+            const totalTPages = Math.ceil(totalT / PAGE_SIZE);
+            return (
+              <div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  {visibleT.map((t, idx) => (
+                    <div key={idx} style={{ background: 'var(--color-bg)', padding: '1rem 1.25rem', borderRadius: '10px', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', minWidth: '24px' }}>#{(transfersPage - 1) * PAGE_SIZE + idx + 1}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap' }}>
+                          <div style={{ minWidth: '160px' }}>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--amber-500)', fontWeight: 700, textTransform: 'uppercase' }}>SOURCE FACILITY (Wastage Risk: {Math.round(t.donor_wastage_risk * 100)}%)</div>
+                            <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-main)' }}>{t.donor_bank_name}</div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <ArrowRight size={20} color="var(--color-info)" />
+                            <div style={{ textAlign: 'center' }}>
+                              <span className="badge badge-purple" style={{ fontSize: '0.85rem', padding: '0.35rem 0.75rem', fontWeight: 700 }}>{t.recommended_units}x {t.blood_group} ({t.component_type})</span>
+                              {t.distance_km && (<div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}><MapPin size={10} style={{ display: 'inline', marginRight: '2px' }} />{t.distance_km} km transit</div>)}
+                            </div>
+                            <ArrowRight size={20} color="var(--color-info)" />
+                          </div>
+                          <div style={{ minWidth: '160px' }}>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--color-critical)', fontWeight: 700, textTransform: 'uppercase' }}>TARGET FACILITY (Deficit: {t.receiver_deficit.toFixed(0)}u)</div>
+                            <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-main)' }}>{t.receiver_bank_name}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                        <span className={`badge ${t.status === 'Resolved' ? 'badge-green' : 'badge-amber'}`} style={{ fontSize: '0.75rem' }}>{t.status}</span>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '280px' }}>{t.recommended_action}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {(hasMoreT || totalT > PAGE_SIZE) && (
+                  <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleT.length} of {totalT} recommendations</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      {totalT > 10 ? (
+                        Array.from({ length: totalTPages }, (_, i) => i + 1).map((p) => (
+                          <button key={p} onClick={() => setTransfersPage(p)} className={`btn ${transfersPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                        ))
+                      ) : hasMoreT ? (
+                        <button onClick={() => setTransfersPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()
+        )}
       </div>
 
       {error && (
@@ -251,127 +452,72 @@ export const CoordinatorDashboard: React.FC = () => {
               No active emergency requests across the network. All trauma bays are fully satisfied.
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {requests.map((req) => {
-                const triage = TRIAGE_CONFIG[req.triage_level] || TRIAGE_CONFIG.ROUTINE_CLINICAL;
-                const covered = req.units_covered ?? 0;
-                const shortfall = req.units_shortfall ?? Math.max(req.units_requested - covered, 0);
+            (() => {
+              const totalReqs = requests.length;
+              const visibleReqs = requests.slice(0, reqsPage * PAGE_SIZE);
+              const hasMoreReqs = totalReqs > visibleReqs.length;
+              const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE);
+              return (
+                <div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {visibleReqs.map((req, index) => {
+                      const covered = req.units_covered ?? 0;
+                      const shortfall = req.units_shortfall ?? Math.max(req.units_requested - covered, 0);
+                      return (
+                        <div key={req.id} style={{ border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '1rem', background: 'var(--color-bg)', borderLeft: `4px solid ${ req.status === 'COMMITTED_IN_TRANSIT' ? 'var(--emerald-500)' : req.status === 'RE_PLANNING' ? 'var(--crimson-500)' : req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'var(--amber-500)' : 'var(--cyan-500)' }` }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                <span style={{ fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{(reqsPage - 1) * PAGE_SIZE + index + 1}</span>
+                                <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>{req.patient_id_token || req.id.slice(0, 8)}</span>
+                                <span style={{ padding: '0.2rem 0.55rem', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700, background: 'rgba(100, 116, 139, 0.12)', color: 'var(--text-main)' }}>{req.status}</span>
+                              </div>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                                <Building2 size={13} style={{ display: 'inline', marginRight: '4px' }} />
+                                {req.hospital_name || 'Hospital Facility'} • Patient Case: <code>{req.patient_id_token}</code>
+                              </div>
+                            </div>
+                          </div>
 
-                return (
-                  <div
-                    key={req.id}
-                    style={{
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: '10px',
-                      padding: '1rem',
-                      background: 'var(--color-bg)',
-                      borderLeft: `4px solid ${
-                        req.status === 'COMMITTED_IN_TRANSIT'
-                          ? 'var(--emerald-500)'
-                          : req.status === 'RE_PLANNING'
-                          ? 'var(--crimson-500)'
-                          : req.status === 'PROXIMITY_ZONE_NOTIFIED'
-                          ? 'var(--amber-500)'
-                          : 'var(--cyan-500)'
-                      }`,
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                          <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>
-                            {req.patient_id_token || req.id.slice(0, 8)}
-                          </span>
-                          <span
-                            style={{
-                              padding: '0.2rem 0.55rem',
-                              borderRadius: '6px',
-                              fontSize: '0.72rem',
-                              fontWeight: 700,
-                              background: triage.bg,
-                              color: triage.color,
-                            }}
-                          >
-                            {triage.label}
-                          </span>
-                          <span
-                            style={{
-                              padding: '0.2rem 0.55rem',
-                              borderRadius: '6px',
-                              fontSize: '0.72rem',
-                              fontWeight: 700,
-                              background: 'rgba(100, 116, 139, 0.12)',
-                              color: 'var(--text-main)',
-                            }}
-                          >
-                            {req.status}
-                          </span>
+                          <div style={{ margin: '0.85rem 0' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '0.3rem' }}>
+                              <span>Required: <strong>{req.required_blood_group} {req.component_type}</strong> ({req.units_requested} Bags)</span>
+                              <span style={{ color: shortfall === 0 ? 'var(--emerald-600)' : 'var(--crimson-500)', fontWeight: 700 }}>{covered} of {req.units_requested} Secured ({shortfall} Shortfall)</span>
+                            </div>
+                            <div style={{ width: '100%', height: '7px', background: 'rgba(0,0,0,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
+                              <div style={{ width: `${Math.min((covered / req.units_requested) * 100, 100)}%`, height: '100%', background: shortfall === 0 ? 'var(--emerald-500)' : 'var(--crimson-500)', transition: 'width 0.3s ease' }} />
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.65rem' }}>
+                            <button onClick={() => viewExplanation(req.id)} className="btn btn-secondary" style={{ padding: '0.35rem 0.7rem', fontSize: '0.75rem' }}>
+                              <FileText size={13} /> Explain Rationale
+                            </button>
+                            <button onClick={() => { setOverrideReq(req); setOverrideResourceId(''); setOverrideReason(''); }} className="btn btn-secondary" style={{ padding: '0.35rem 0.7rem', fontSize: '0.75rem', color: 'var(--amber-500)' }}>
+                              <Sliders size={13} /> Manual Clinical Override
+                            </button>
+                          </div>
                         </div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                          <Building2 size={13} style={{ display: 'inline', marginRight: '4px' }} />
-                          {req.hospital_name || 'Hospital Facility'} • Patient Case: <code>{req.patient_id_token}</code>
-                        </div>
-                      </div>
-
-                      {/* Urgency Meter */}
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Urgency Score</div>
-                        <div style={{ fontSize: '1.25rem', fontWeight: 800, color: req.calculated_urgency_score >= 80 ? 'var(--crimson-500)' : 'var(--amber-500)' }}>
-                          {req.calculated_urgency_score.toFixed(1)}/100
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Coverage Bar */}
-                    <div style={{ margin: '0.85rem 0' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '0.3rem' }}>
-                        <span>
-                          Required: <strong>{req.required_blood_group} {req.component_type}</strong> ({req.units_requested} Bags)
-                        </span>
-                        <span style={{ color: shortfall === 0 ? 'var(--emerald-600)' : 'var(--crimson-500)', fontWeight: 700 }}>
-                          {covered} of {req.units_requested} Secured ({shortfall} Shortfall)
-                        </span>
-                      </div>
-                      <div style={{ width: '100%', height: '7px', background: 'rgba(0,0,0,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
-                        <div
-                          style={{
-                            width: `${Math.min((covered / req.units_requested) * 100, 100)}%`,
-                            height: '100%',
-                            background: shortfall === 0 ? 'var(--emerald-500)' : 'var(--crimson-500)',
-                            transition: 'width 0.3s ease',
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Operational Action Buttons */}
-                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.65rem' }}>
-                      <button
-                        onClick={() => viewExplanation(req.id)}
-                        className="btn btn-secondary"
-                        style={{ padding: '0.35rem 0.7rem', fontSize: '0.75rem' }}
-                      >
-                        <FileText size={13} />
-                        Explain Rationale
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          setOverrideReq(req);
-                          setOverrideResourceId('');
-                          setOverrideReason('');
-                        }}
-                        className="btn btn-secondary"
-                        style={{ padding: '0.35rem 0.7rem', fontSize: '0.75rem', color: 'var(--amber-500)' }}
-                      >
-                        <Sliders size={13} />
-                        Manual Clinical Override
-                      </button>
-                    </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
-            </div>
+                  {(hasMoreReqs || totalReqs > PAGE_SIZE) && (
+                    <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleReqs.length} of {totalReqs} requests</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        {totalReqs > 10 ? (
+                          Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
+                            <button key={p} onClick={() => setReqsPage(p)} className={`btn ${reqsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                          ))
+                        ) : hasMoreReqs ? (
+                          <button onClick={() => setReqsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
           )}
         </div>
 

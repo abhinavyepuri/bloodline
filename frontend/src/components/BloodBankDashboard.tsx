@@ -7,6 +7,8 @@ import {
   BloodComponentType,
   BloodRequest,
   DonorPublic,
+  SeriesForecast,
+  PredictionSummary,
 } from '../types';
 import {
   Droplet,
@@ -18,12 +20,12 @@ import {
   CheckCircle2,
   Clock,
   Activity,
+  Layers,
+  Trash2,
+  Sparkles,
+  Check,
   Package,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  ArrowUpDown,
-  Search,
+  TrendingUp,
 } from 'lucide-react';
 
 interface HospitalOrder {
@@ -64,8 +66,22 @@ interface HospitalOrder {
   }[];
 }
 
-/** Volume logged for a newly registered bag; the form no longer keeps dead state for it. */
-const DEFAULT_UNIT_VOLUME_ML = 300;
+interface MultiRowItem {
+  id: string;
+  blood_group: string;
+  component_type: BloodComponentType;
+  quantity: number;
+  volume_ml: number;
+  expiry_days: number;
+}
+
+const DEFAULT_EXPIRY_BY_COMPONENT: Record<BloodComponentType, number> = {
+  PRBC: 42,
+  WHOLE_BLOOD: 35,
+  PLATELETS: 5,
+  FFP: 365,
+  CRYOPRECIPITATE: 365,
+};
 
 export const BloodBankDashboard: React.FC = () => {
   const { lastEvent } = useWebSocket();
@@ -74,47 +90,63 @@ export const BloodBankDashboard: React.FC = () => {
   const [orders, setOrders] = useState<HospitalOrder[]>([]);
   const [activeRequests, setActiveRequests] = useState<BloodRequest[]>([]);
   const [activeDonors, setActiveDonors] = useState<DonorPublic[]>([]);
+  const [forecasts, setForecasts] = useState<SeriesForecast[]>([]);
+  const [forecastSummary, setForecastSummary] = useState<PredictionSummary | null>(null);
+  const [componentFilter, setComponentFilter] = useState<string>('PRBC');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [modalTab, setModalTab] = useState<'BATCH_GENERATOR' | 'MULTI_ROW' | 'SINGLE'>('BATCH_GENERATOR');
+  const [submitting, setSubmitting] = useState(false);
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
-  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Blood Bank Desk sorting, filter, and expansion state
-  type DeskSortKey = 'urgency' | 'hospital' | 'blood_group' | 'units' | 'shortfall' | 'status' | 'created_at';
-  const [deskSortKey, setDeskSortKey] = useState<DeskSortKey>('urgency');
-  const [deskSortAsc, setDeskSortAsc] = useState<boolean>(false);
-  const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
-  const [deskFilter, setDeskFilter] = useState<'ALL' | 'ACTION_REQUIRED' | 'DISPATCHED'>('ALL');
-  const [deskSearch, setDeskSearch] = useState('');
+  // Pagination state for each list section
+  const PAGE_SIZE = 5;
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [requestsPage, setRequestsPage] = useState(1);
+  const [donorsPage, setDonorsPage] = useState(1);
+  const [unitsPage, setUnitsPage] = useState(1);
 
-  // Inventory sorting state
-  type InvSortKey = 'batch' | 'group' | 'type' | 'volume' | 'expiry' | 'status';
-  const [invSortKey, setInvSortKey] = useState<InvSortKey>('expiry');
-  const [invSortAsc, setInvSortAsc] = useState<boolean>(true);
-
-  // New unit form
+  // Single unit form
   const [newBatch, setNewBatch] = useState('');
   const [newBloodGroup, setNewBloodGroup] = useState('O-');
   const [newComponent, setNewComponent] = useState<BloodComponentType>('PRBC');
   const [newExpiryDays, setNewExpiryDays] = useState(42);
-  const [newPacketsCount, setNewPacketsCount] = useState<number>(1);
-  const [registering, setRegistering] = useState<boolean>(false);
+  const [newVolume, setNewVolume] = useState(450);
+
+  // Quick Batch Generator form
+  const [batchBloodGroup, setBatchBloodGroup] = useState('O-');
+  const [batchComponent, setBatchComponent] = useState<BloodComponentType>('PRBC');
+  const [batchQuantity, setBatchQuantity] = useState(5);
+  const [batchPrefix, setBatchPrefix] = useState('BB-DRIVE-');
+  const [batchVolume, setBatchVolume] = useState(450);
+  const [batchExpiryDays, setBatchExpiryDays] = useState(42);
+
+  // Multi-Row Table form
+  const [multiRows, setMultiRows] = useState<MultiRowItem[]>([
+    { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
+    { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 6, volume_ml: 450, expiry_days: 42 },
+    { id: '3', blood_group: 'A+', component_type: 'PLATELETS', quantity: 3, volume_ml: 300, expiry_days: 5 },
+  ]);
 
   const fetchInventoryAndOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const [invData, ordersData, reqData, donorsData] = await Promise.all([
+      const [invData, ordersData, reqData, donorsData, forecastData, summaryData] = await Promise.all([
         api.get<InventoryUnit[]>('/inventory'),
         api.get<HospitalOrder[]>('/inventory/orders'),
         api.get<BloodRequest[]>('/requests'),
         api.get<DonorPublic[]>('/donors'),
+        api.get<SeriesForecast[]>('/ml/forecasts').catch(() => [] as SeriesForecast[]),
+        api.get<PredictionSummary>('/ml/forecasts/summary').catch(() => null),
       ]);
       setUnits(invData);
       setOrders(ordersData);
       setActiveRequests(reqData);
       setActiveDonors(donorsData.filter((d) => d.is_available));
-      setError(null);
+      setForecasts(forecastData);
+      setForecastSummary(summaryData);
     } catch (err) {
       console.error('Failed to fetch inventory or orders:', err);
       setError(err instanceof Error ? err.message : 'Could not load blood-bank data.');
@@ -190,8 +222,10 @@ export const BloodBankDashboard: React.FC = () => {
     }
   };
 
-  const handleAddUnit = async (e: React.FormEvent) => {
+  // Add single unit
+  const handleAddSingleUnit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitting(true);
     const now = new Date();
     const expiry = new Date(Date.now() + newExpiryDays * 24 * 3600 * 1000);
     const count = Math.max(1, Math.min(100, Number(newPacketsCount) || 1));
@@ -204,21 +238,142 @@ export const BloodBankDashboard: React.FC = () => {
         batch_number: baseBatch,
         blood_group: newBloodGroup,
         component_type: newComponent,
-        volume_ml: DEFAULT_UNIT_VOLUME_ML,
+        volume_ml: newVolume,
         collection_date: now.toISOString(),
         expiry_date: expiry.toISOString(),
         quantity: count,
       });
       setShowAddModal(false);
       setNewBatch('');
-      setNewPacketsCount(1);
+      setStatusMessage({ type: 'success', text: `Successfully registered 1 unit of ${newBloodGroup} (${newComponent})!` });
+      setTimeout(() => setStatusMessage(null), 5000);
       await fetchInventoryAndOrders();
     } catch (err) {
-      setError('Error registering blood packet(s): ' + (err instanceof Error ? err.message : String(err)));
+      alert('Error registering blood unit: ' + (err instanceof Error ? err.message : err));
     } finally {
-      setRegistering(false);
+      setSubmitting(false);
     }
   };
+
+  // Batch generator submit
+  const handleBatchGeneratorSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const res = await api.post<InventoryUnit[]>('/inventory/batch', {
+        blood_group: batchBloodGroup,
+        component_type: batchComponent,
+        quantity: batchQuantity,
+        batch_prefix: batchPrefix.trim() || undefined,
+        volume_ml: batchVolume,
+        expiry_days: batchExpiryDays,
+      });
+      setShowAddModal(false);
+      setStatusMessage({
+        type: 'success',
+        text: `Successfully batch added ${res.length} packets of ${batchBloodGroup} (${batchComponent}) into storage!`,
+      });
+      setTimeout(() => setStatusMessage(null), 5000);
+      await fetchInventoryAndOrders();
+    } catch (err) {
+      alert('Error batch registering blood units: ' + (err instanceof Error ? err.message : err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Multi-row submit
+  const handleMultiRowSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (multiRows.length === 0) {
+      alert('Please add at least one row.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const items = multiRows.map((r) => ({
+        blood_group: r.blood_group,
+        component_type: r.component_type,
+        quantity: r.quantity,
+        volume_ml: r.volume_ml,
+        expiry_days: r.expiry_days,
+      }));
+      const res = await api.post<InventoryUnit[]>('/inventory/batch', { items });
+      setShowAddModal(false);
+      const totalBags = multiRows.reduce((sum, r) => sum + r.quantity, 0);
+      setStatusMessage({
+        type: 'success',
+        text: `Successfully registered ${res.length} blood packets across ${multiRows.length} blood type categories!`,
+      });
+      setTimeout(() => setStatusMessage(null), 5000);
+      await fetchInventoryAndOrders();
+    } catch (err) {
+      alert('Error registering batch rows: ' + (err instanceof Error ? err.message : err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Helper to add row in multi-row table
+  const addMultiRow = () => {
+    setMultiRows((prev) => [
+      ...prev,
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        blood_group: 'O+',
+        component_type: 'PRBC',
+        quantity: 5,
+        volume_ml: 450,
+        expiry_days: 42,
+      },
+    ]);
+  };
+
+  const removeMultiRow = (id: string) => {
+    setMultiRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const updateMultiRow = (id: string, field: keyof MultiRowItem, value: any) => {
+    setMultiRows((prev) =>
+      prev.map((r) => {
+        if (r.id === id) {
+          const updated = { ...r, [field]: value };
+          if (field === 'component_type') {
+            updated.expiry_days = DEFAULT_EXPIRY_BY_COMPONENT[value as BloodComponentType] || 42;
+          }
+          return updated;
+        }
+        return r;
+      })
+    );
+  };
+
+  const loadPreset = (presetName: 'DRIVE' | 'TRAUMA' | 'PLATELETS') => {
+    if (presetName === 'DRIVE') {
+      setMultiRows([
+        { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
+        { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 8, volume_ml: 450, expiry_days: 42 },
+        { id: '3', blood_group: 'A+', component_type: 'PRBC', quantity: 6, volume_ml: 450, expiry_days: 42 },
+        { id: '4', blood_group: 'B+', component_type: 'PRBC', quantity: 4, volume_ml: 450, expiry_days: 42 },
+        { id: '5', blood_group: 'AB+', component_type: 'FFP', quantity: 2, volume_ml: 250, expiry_days: 365 },
+      ]);
+    } else if (presetName === 'TRAUMA') {
+      setMultiRows([
+        { id: '1', blood_group: 'O-', component_type: 'PRBC', quantity: 10, volume_ml: 450, expiry_days: 42 },
+        { id: '2', blood_group: 'O+', component_type: 'PRBC', quantity: 10, volume_ml: 450, expiry_days: 42 },
+        { id: '3', blood_group: 'AB-', component_type: 'FFP', quantity: 5, volume_ml: 250, expiry_days: 365 },
+      ]);
+    } else if (presetName === 'PLATELETS') {
+      setMultiRows([
+        { id: '1', blood_group: 'O+', component_type: 'PLATELETS', quantity: 4, volume_ml: 300, expiry_days: 5 },
+        { id: '2', blood_group: 'A+', component_type: 'PLATELETS', quantity: 4, volume_ml: 300, expiry_days: 5 },
+        { id: '3', blood_group: 'B+', component_type: 'PLATELETS', quantity: 2, volume_ml: 300, expiry_days: 5 },
+      ]);
+    }
+  };
+
+  const totalMultiRowBags = multiRows.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+
 
   const availableCount = units.filter((u) => u.status === 'AVAILABLE').length;
   const lockedCount = units.filter((u) => u.status === 'LOCKED_RESERVE').length;
@@ -389,6 +544,45 @@ export const BloodBankDashboard: React.FC = () => {
 
   return (
     <div>
+      {/* Toast / Status Alert Banner */}
+      {statusMessage && (
+        <div
+          style={{
+            background: statusMessage.type === 'success' ? 'rgba(22, 163, 74, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+            border: `1px solid ${statusMessage.type === 'success' ? 'rgba(22, 163, 74, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+            borderRadius: '10px',
+            padding: '0.85rem 1.25rem',
+            marginBottom: '1.25rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.85rem',
+            color: statusMessage.type === 'success' ? 'var(--emerald-400)' : 'var(--crimson-500)',
+            fontSize: '0.9rem',
+            fontWeight: 600,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            {statusMessage.type === 'success' ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}
+            <span>{statusMessage.text}</span>
+          </div>
+          <button
+            onClick={() => setStatusMessage(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'inherit',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              padding: '0.2rem',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Informative Flow Notice */}
       <div style={{
         background: 'rgba(6, 182, 212, 0.1)',
@@ -404,7 +598,7 @@ export const BloodBankDashboard: React.FC = () => {
       }}>
         <Building2 size={24} style={{ flexShrink: 0, color: 'var(--cyan-400)' }} />
         <div>
-          <b>Hospital-to-Blood-Bank Pipeline:</b> Emergency requests created by <b>Hospital Admin</b> are automatically matched against this blood bank's stock. You can review incoming hospital orders, inspect locked cold-chain units, and confirm dispatch to the ambulance.
+          <b>Hospital-to-Blood-Bank Pipeline:</b> Emergency requests created by <b>Hospital Admin</b> are automatically matched against this blood bank's stock. You can batch add packets in bulk, review incoming hospital orders, inspect locked cold-chain units, and confirm dispatch to the ambulance.
         </div>
       </div>
 
@@ -436,7 +630,7 @@ export const BloodBankDashboard: React.FC = () => {
       )}
 
       {/* Top Stat Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="glass-panel">
           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>READY ON SHELVES</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--emerald-400)', marginTop: '0.25rem' }}>
@@ -458,15 +652,30 @@ export const BloodBankDashboard: React.FC = () => {
           </div>
         </div>
 
-        <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', justifyContent: 'center' }}>
+          <button
+            id="btn-batch-add"
+            onClick={() => {
+              setModalTab('BATCH_GENERATOR');
+              setShowAddModal(true);
+            }}
+            className="btn btn-cyan"
+            style={{ width: '100%', padding: '0.55rem 0.85rem', fontWeight: 700 }}
+          >
+            <Layers size={16} />
+            + Batch Add Packets
+          </button>
           <button
             id="btn-add-unit"
-            onClick={() => setShowAddModal(true)}
-            className="btn btn-cyan"
-            style={{ width: '100%', height: '100%' }}
+            onClick={() => {
+              setModalTab('SINGLE');
+              setShowAddModal(true);
+            }}
+            className="btn btn-secondary"
+            style={{ width: '100%', fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}
           >
-            <Plus size={16} />
-            + Add New Blood Bag
+            <Plus size={14} />
+            + Single Unit Entry
           </button>
         </div>
       </div>
@@ -574,402 +783,90 @@ export const BloodBankDashboard: React.FC = () => {
             <p>No orders match the current filter or search criteria.</p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-              <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)', userSelect: 'none' }}>
-                  <th style={{ width: '38px', padding: '0.65rem 0.5rem', textAlign: 'center' }}></th>
-                  <th style={{ padding: '0.65rem 0.75rem', cursor: 'pointer' }} onClick={() => handleDeskSort('hospital')}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                      HOSPITAL {deskSortKey === 'hospital' ? (deskSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                    </span>
-                  </th>
-                  <th style={{ padding: '0.65rem 0.75rem', cursor: 'pointer' }} onClick={() => handleDeskSort('blood_group')}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                      BLOOD GROUP {deskSortKey === 'blood_group' ? (deskSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                    </span>
-                  </th>
-                  <th style={{ padding: '0.65rem 0.75rem', cursor: 'pointer' }} onClick={() => handleDeskSort('units')}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                      PACKETS (REQ / SHORTFALL) {deskSortKey === 'units' ? (deskSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                    </span>
-                  </th>
-                  <th style={{ padding: '0.65rem 0.75rem', cursor: 'pointer' }} onClick={() => handleDeskSort('urgency')}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                      URGENCY SCORE {deskSortKey === 'urgency' ? (deskSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                    </span>
-                  </th>
-                  <th style={{ padding: '0.65rem 0.75rem', cursor: 'pointer' }} onClick={() => handleDeskSort('status')}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                      STATUS {deskSortKey === 'status' ? (deskSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                    </span>
-                  </th>
-                  <th style={{ padding: '0.65rem 0.75rem', cursor: 'pointer' }} onClick={() => handleDeskSort('created_at')}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                      TIME {deskSortKey === 'created_at' ? (deskSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                    </span>
-                  </th>
-                  <th style={{ padding: '0.65rem 0.75rem', textAlign: 'right' }}>QUICK ACTIONS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredAndSortedOrders.map((order) => {
-                  const isExpanded = isOrderExpanded(order.request_id);
-                  const hasReservedUnits = order.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE');
-                  const allDispatched =
-                    order.allocated_units.length > 0 &&
-                    order.allocated_units.every((u) => u.unit_status === 'DISPATCHED');
-                  const compatibleUnits = order.available_compatible_units || [];
-                  const shortfall = order.units_shortfall ?? Math.max(0, order.units_requested - (order.units_covered ?? order.allocated_units.length));
-                  const isProcessing = dispatchingId === order.request_id || acceptingId === order.request_id;
-
-                  return (
-                    <React.Fragment key={order.request_id}>
-                      {/* Summary Row */}
-                      <tr
-                        id={`order-row-${order.request_id.slice(0, 8)}`}
-                        onClick={() => handleToggleExpand(order.request_id)}
-                        style={{
-                          borderBottom: isExpanded ? 'none' : '1px solid var(--border-subtle)',
-                          background: isExpanded ? 'rgba(6, 182, 212, 0.07)' : 'transparent',
-                          cursor: 'pointer',
-                          transition: 'background 0.15s ease',
-                        }}
-                      >
-                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'center' }}>
-                          <button
-                            type="button"
-                            aria-label={isExpanded ? 'Collapse order' : 'Expand order'}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleToggleExpand(order.request_id);
-                            }}
-                            style={{
-                              background: 'transparent',
-                              border: 'none',
-                              color: isExpanded ? 'var(--cyan-400)' : 'var(--text-muted)',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                          </button>
-                        </td>
-                        <td style={{ padding: '0.75rem' }}>
-                          <div style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '0.95rem' }}>
-                            {order.hospital_name}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
-                            Token: <code>{order.patient_id_token}</code>
-                          </div>
-                        </td>
-                        <td style={{ padding: '0.75rem' }}>
-                          <span style={{ fontWeight: 800, color: 'var(--crimson-500)', fontSize: '1rem' }}>
-                            {order.required_blood_group}
-                          </span>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                            {order.component_type}
-                          </div>
-                        </td>
-                        <td style={{ padding: '0.75rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                            <span style={{ fontWeight: 700 }}>{order.units_requested} Packets</span>
-                            {shortfall > 0 ? (
-                              <span className="badge badge-amber" style={{ fontSize: '0.7rem' }}>Shortfall: {shortfall}</span>
-                            ) : (
-                              <span className="badge badge-green" style={{ fontSize: '0.7rem' }}>Fully Covered</span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '0.15rem' }}>
-                            {order.allocated_units.length} bag(s) allocated from storage
-                          </div>
-                        </td>
-                        <td style={{ padding: '0.75rem' }}>
-                          <span
-                            className={`badge ${
-                              order.calculated_urgency_score >= 80
-                                ? 'badge-red'
-                                : order.calculated_urgency_score >= 50
-                                ? 'badge-amber'
-                                : 'badge-cyan'
-                            }`}
-                            style={{ fontWeight: 700 }}
-                          >
-                            {order.calculated_urgency_score}/100
-                          </span>
-                        </td>
-                        <td style={{ padding: '0.75rem' }}>
-                          <span className={`badge ${allDispatched ? 'badge-green' : 'badge-amber'}`}>
-                            {allDispatched ? 'DISPATCHED' : order.status}
-                          </span>
-                        </td>
-                        <td style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                          {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </td>
-                        <td style={{ padding: '0.75rem', textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem', alignItems: 'center' }}>
-                            {hasReservedUnits && (
-                              <button
-                                id={`btn-dispatch-${order.request_id.slice(0, 8)}`}
-                                onClick={() => handleDispatchOrder(order.request_id)}
-                                disabled={isProcessing}
-                                className="btn btn-cyan"
-                                style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
-                              >
-                                <Truck size={13} />
-                                {dispatchingId === order.request_id ? 'Handing Over...' : 'Dispatch'}
-                              </button>
-                            )}
-                            {compatibleUnits.length > 0 && !hasReservedUnits && shortfall > 0 && (
-                              <button
-                                id={`btn-dispatch-ready-${order.request_id.slice(0, 8)}`}
-                                onClick={() => handleAcceptOrder(order.request_id, true)}
-                                disabled={isProcessing}
-                                className="btn btn-cyan"
-                                style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
-                              >
-                                <Truck size={13} />
-                                {acceptingId === order.request_id ? 'Dispatching...' : 'Accept & Dispatch'}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => handleToggleExpand(order.request_id)}
-                              className="btn btn-secondary"
-                              style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem' }}
-                            >
-                              {isExpanded ? 'Hide' : 'Details'}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-
-                      {/* Expandable Detail Drawer Row */}
-                      {isExpanded && (
-                        <tr
-                          id={`order-card-${order.request_id.slice(0, 8)}`}
-                          style={{
-                            borderBottom: '1px solid var(--border-subtle)',
-                            background: 'rgba(6, 182, 212, 0.03)',
-                          }}
-                        >
-                          <td colSpan={8} style={{ padding: '0.85rem 1.25rem 1.25rem 2.75rem' }}>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-                              {/* Order Metadata (No triage word!) */}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
-                                <div>
-                                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                                    Patient Token: <code>{order.patient_id_token}</code> | Severity Protocol: <b>{order.triage_level?.replace(/_/g, ' ')}</b> | Urgency: <b>{order.calculated_urgency_score}/100</b>
-                                  </div>
-                                  {order.hospital_address && (
-                                    <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
-                                      Destination: {order.hospital_address}
-                                    </div>
-                                  )}
-                                </div>
-
-                                <div style={{ textAlign: 'right' }}>
-                                  <span style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--crimson-500)' }}>
-                                    {order.units_requested} Packet(s) {order.required_blood_group} ({order.component_type})
-                                  </span>
-                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Requested Order Volume</div>
-                                </div>
-                              </div>
-
-                              {/* Matched Units in this blood bank */}
-                              <div style={{ background: 'var(--color-surface)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.4rem', textTransform: 'uppercase' }}>
-                                  Blood Bags Allocated From Our Storage:
-                                </div>
-                                {order.allocated_units.length === 0 ? (
-                                  compatibleUnits.length > 0 ? (
-                                    <div style={{
-                                      background: 'rgba(16, 185, 129, 0.08)',
-                                      border: '1px solid rgba(16, 185, 129, 0.3)',
-                                      borderRadius: '6px',
-                                      padding: '0.65rem 0.85rem',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: '0.6rem',
-                                      fontSize: '0.82rem',
-                                      color: 'var(--emerald-400)',
-                                    }}>
-                                      <CheckCircle2 size={16} />
-                                      <span>
-                                        <b>{compatibleUnits.length} Compatible Bag(s) In Cold Storage</b> ready to be accepted and dispatched for this hospital order.
-                                      </span>
-                                    </div>
-                                  ) : (order.volunteer_donors && order.volunteer_donors.length > 0) ? (
-                                    <div style={{
-                                      background: 'rgba(16, 185, 129, 0.08)',
-                                      border: '1px solid rgba(16, 185, 129, 0.3)',
-                                      borderRadius: '6px',
-                                      padding: '0.65rem 0.85rem',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: '0.6rem',
-                                      fontSize: '0.82rem',
-                                      color: 'var(--emerald-400)',
-                                    }}>
-                                      <CheckCircle2 size={16} />
-                                      <span>
-                                        <b>{order.volunteer_donors.length} Volunteer Unit(s) Committed &amp; En Route</b> to hospital ward.
-                                      </span>
-                                    </div>
-                                  ) : (
-                                    <div style={{
-                                      background: 'rgba(245, 158, 11, 0.1)',
-                                      border: '1px dashed rgba(245, 158, 11, 0.4)',
-                                      borderRadius: '6px',
-                                      padding: '0.6rem 0.85rem',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: '0.6rem',
-                                      fontSize: '0.8rem',
-                                      color: 'var(--amber-400)',
-                                    }}>
-                                      <AlertTriangle size={16} />
-                                      <span>
-                                        Storage Depleted for {order.required_blood_group} ({order.component_type}) — Automated Matching Engine routed this demand to <b>Live Volunteer Donors</b> across the city.
-                                      </span>
-                                    </div>
-                                  )
-                                ) : (
-                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                                    {order.allocated_units.map((u) => (
-                                      <div
-                                        key={u.unit_id}
-                                        style={{
-                                          background: 'var(--color-bg)',
-                                          padding: '0.4rem 0.75rem',
-                                          borderRadius: '6px',
-                                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                                          fontSize: '0.8rem',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          gap: '0.5rem',
-                                        }}
-                                      >
-                                        <Droplet size={13} color="var(--crimson-500)" />
-                                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>Bag {u.batch_number}</span>
-                                        <span>({u.blood_group})</span>
-                                        <span className={`badge ${u.unit_status === 'LOCKED_RESERVE' ? 'badge-amber' : u.unit_status === 'DISPATCHED' ? 'badge-green' : 'badge-red'}`} style={{ fontSize: '0.65rem' }}>
-                                          {u.unit_status === 'LOCKED_RESERVE' ? 'Reserved' : u.unit_status === 'DISPATCHED' ? 'Dispatched' : 'Damaged'}
-                                        </span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-
-                                {order.volunteer_donors && order.volunteer_donors.length > 0 && order.allocated_units.length > 0 && (
-                                  <div style={{ marginTop: '0.6rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>En-Route Volunteers:</span>
-                                    {order.volunteer_donors.map((v, i) => (
-                                      <div
-                                        key={v.allocation_id || i}
-                                        style={{
-                                          background: 'rgba(16, 185, 129, 0.1)',
-                                          border: '1px solid rgba(16, 185, 129, 0.3)',
-                                          padding: '0.3rem 0.6rem',
-                                          borderRadius: '6px',
-                                          fontSize: '0.75rem',
-                                          color: 'var(--emerald-400)',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          gap: '0.4rem',
-                                        }}
-                                      >
-                                        <span>🩸 {v.blood_group} Volunteer {v.donor_id.slice(0, 6)}</span>
-                                        {v.estimated_transit_minutes != null && (
-                                          <span style={{ color: 'var(--text-muted)' }}>(~{v.estimated_transit_minutes} min)</span>
-                                        )}
-                                        <span className="badge badge-green" style={{ fontSize: '0.6rem', padding: '0.1rem 0.35rem' }}>En Route</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Ready Stock Available in Storage - Option to Accept and Dispatch */}
-                              {compatibleUnits.length > 0 && shortfall > 0 && (
-                                <div style={{
-                                  background: 'rgba(6, 182, 212, 0.08)',
-                                  border: '1px solid rgba(6, 182, 212, 0.3)',
-                                  borderRadius: '8px',
-                                  padding: '0.75rem 1rem',
-                                  display: 'flex',
-                                  justifyContent: 'space-between',
-                                  alignItems: 'center',
-                                  flexWrap: 'wrap',
-                                  gap: '0.75rem',
-                                }}>
-                                  <div>
-                                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--cyan-400)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                      <Droplet size={15} />
-                                      <span>Packets Ready in Storage: {compatibleUnits.length} Compatible Bag(s)</span>
-                                    </div>
-                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                                      Available: {compatibleUnits.slice(0, 3).map(u => `${u.batch_number} (${u.blood_group})`).join(', ')}{compatibleUnits.length > 3 ? ` +${compatibleUnits.length - 3} more` : ''}
-                                    </div>
-                                  </div>
-
-                                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <button
-                                      id={`btn-accept-reserve-${order.request_id.slice(0, 8)}`}
-                                      onClick={() => handleAcceptOrder(order.request_id, false)}
-                                      disabled={isProcessing}
-                                      className="btn btn-secondary"
-                                      style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
-                                    >
-                                      <CheckCircle2 size={14} />
-                                      {acceptingId === order.request_id ? 'Reserving...' : `Accept & Reserve (${Math.min(shortfall, compatibleUnits.length)})`}
-                                    </button>
-                                    <button
-                                      id={`btn-accept-dispatch-${order.request_id.slice(0, 8)}`}
-                                      onClick={() => handleAcceptOrder(order.request_id, true)}
-                                      disabled={isProcessing}
-                                      className="btn btn-cyan"
-                                      style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
-                                    >
-                                      <Truck size={14} />
-                                      {acceptingId === order.request_id ? 'Dispatching...' : 'Accept & Dispatch Now'}
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Dispatch Action status and handover button */}
-                              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                                {hasReservedUnits && (
-                                  <button
-                                    onClick={() => handleDispatchOrder(order.request_id)}
-                                    disabled={isProcessing}
-                                    className="btn btn-cyan"
-                                    style={{ fontSize: '0.85rem', padding: '0.45rem 1rem' }}
-                                  >
-                                    <Truck size={15} />
-                                    {dispatchingId === order.request_id ? 'Handing Over...' : 'Hand to Ambulance (Dispatch)'}
-                                  </button>
-                                )}
-                                {allDispatched && shortfall === 0 && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--emerald-400)', fontSize: '0.85rem', fontWeight: 600 }}>
-                                    <CheckCircle2 size={16} />
-                                    All blood bags handed to courier and on the way to hospital.
-                                  </div>
-                                )}
-                              </div>
+          (() => {
+            const totalOrders = orders.length;
+            const visibleOrders = orders.slice(0, ordersPage * PAGE_SIZE);
+            const hasMoreOrders = totalOrders > visibleOrders.length;
+            const totalOrderPages = Math.ceil(totalOrders / PAGE_SIZE);
+            return (
+              <div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {visibleOrders.map((order, index) => {
+                    const hasReservedUnits = order.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE');
+                    const allDispatched = order.allocated_units.length > 0 && order.allocated_units.every((u) => u.unit_status === 'DISPATCHED');
+                    return (
+                      <div key={order.request_id} id={`order-card-${order.request_id.slice(0, 8)}`} style={{ background: 'var(--color-bg)', padding: '1.2rem', borderRadius: '10px', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.3rem' }}>
+                              <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{(ordersPage - 1) * PAGE_SIZE + index + 1}</span>
+                              <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)' }}>{order.hospital_name}</span>
+                              <span className={`badge ${allDispatched ? 'badge-green' : 'badge-amber'}`}>{allDispatched ? 'DISPATCHED' : order.status}</span>
                             </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                              Patient Token: <code>{order.patient_id_token}</code>
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--crimson-500)' }}>{order.units_requested}x {order.required_blood_group} ({order.component_type})</span>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Requested Quantity</div>
+                          </div>
+                        </div>
+                        <div style={{ background: 'var(--color-surface)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.4rem', textTransform: 'uppercase' }}>Blood Bags Allocated From Our Storage:</div>
+                          {order.allocated_units.length === 0 ? (
+                            <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px dashed rgba(245, 158, 11, 0.4)', borderRadius: '6px', padding: '0.6rem 0.85rem', display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.8rem', color: 'var(--amber-400)' }}>
+                              <AlertTriangle size={16} />
+                              <span>Storage Depleted for {order.required_blood_group} ({order.component_type}) — Automated Matching Engine routed this demand to <b>Live Volunteer Donors</b> across the city.</span>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                              {order.allocated_units.map((u) => (
+                                <div key={u.unit_id} style={{ background: 'var(--color-bg)', padding: '0.4rem 0.75rem', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.1)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                  <Droplet size={13} color="var(--crimson-500)" />
+                                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>Bag {u.batch_number}</span>
+                                  <span>({u.blood_group})</span>
+                                  <span className={`badge ${u.unit_status === 'LOCKED_RESERVE' ? 'badge-amber' : u.unit_status === 'DISPATCHED' ? 'badge-green' : 'badge-red'}`} style={{ fontSize: '0.65rem' }}>
+                                    {u.unit_status === 'LOCKED_RESERVE' ? 'Reserved' : u.unit_status === 'DISPATCHED' ? 'Dispatched' : 'Damaged'}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', alignItems: 'center' }}>
+                          {hasReservedUnits && (
+                            <button id={`btn-dispatch-${order.request_id.slice(0, 8)}`} onClick={() => handleDispatchOrder(order.request_id)} disabled={dispatchingId === order.request_id} className="btn btn-cyan" style={{ fontSize: '0.85rem', padding: '0.45rem 1rem' }}>
+                              <Truck size={15} />{dispatchingId === order.request_id ? 'Handing Over...' : 'Hand to Ambulance (Dispatch)'}
+                            </button>
+                          )}
+                          {allDispatched && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--emerald-400)', fontSize: '0.85rem', fontWeight: 600 }}>
+                              <CheckCircle2 size={16} /> All blood bags handed to courier and on the way to hospital.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {(hasMoreOrders || totalOrders > PAGE_SIZE) && (
+                  <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleOrders.length} of {totalOrders} orders</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      {totalOrders > 10 ? (
+                        Array.from({ length: totalOrderPages }, (_, i) => i + 1).map((p) => (
+                          <button key={p} onClick={() => setOrdersPage(p)} className={`btn ${ordersPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                        ))
+                      ) : hasMoreOrders ? (
+                        <button onClick={() => setOrdersPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()
         )}
       </div>
 
@@ -988,67 +885,59 @@ export const BloodBankDashboard: React.FC = () => {
             No active emergency requests across the network.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            {activeRequests.map((req) => (
-              <div
-                key={req.id}
-                style={{
-                  background: 'var(--color-bg)',
-                  padding: '1rem',
-                  borderRadius: '8px',
-                  border: '1px solid var(--border-subtle)',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                  gap: '0.5rem',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.2rem' }}>
-                    {req.hospital_name || 'Hospital'} — {req.units_requested}x {req.required_blood_group} ({req.component_type === 'PRBC' ? 'Red Blood Cells' : req.component_type})
-                  </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Urgency: <b>{req.calculated_urgency_score?.toFixed(0) ?? 0}/100</b> | Severity Protocol: <b>{req.triage_level?.replace(/_/g, ' ')}</b> | Covered: <b>{req.units_covered ?? 0} of {req.units_requested}</b>
-                  </div>
+          (() => {
+            const totalReqs = activeRequests.length;
+            const visibleReqs = activeRequests.slice(0, requestsPage * PAGE_SIZE);
+            const hasMoreReqs = totalReqs > visibleReqs.length;
+            const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE);
+            return (
+              <div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  {visibleReqs.map((req, index) => (
+                    <div key={req.id} style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                          <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{(requestsPage - 1) * PAGE_SIZE + index + 1}</span>
+                          <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                            {req.hospital_name || 'Hospital'} — {req.units_requested}x {req.required_blood_group} ({req.component_type === 'PRBC' ? 'Red Blood Cells' : req.component_type})
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                          Urgency: <b>{req.calculated_urgency_score?.toFixed(0) ?? 0}/100</b> | Covered: <b>{req.units_covered ?? 0} of {req.units_requested}</b>
+                        </div>
+                      </div>
+                      <span className={`badge ${
+                        req.status === 'FULFILLED' ? 'badge-green' :
+                        req.status === 'COMMITTED_IN_TRANSIT' ? 'badge-cyan' :
+                        req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'badge-amber' :
+                        'badge-red'
+                      }`}>
+                        {req.status === 'FULFILLED' ? 'Delivered' :
+                         req.status === 'COMMITTED_IN_TRANSIT' ? 'En Route' :
+                         req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'Asking Donors' :
+                         req.status === 'PENDING_EVALUATION' ? 'Searching...' :
+                         req.status}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                  {(() => {
-                    const corrOrder = orders.find((o) => o.request_id === req.id);
-                    const hasCompatible = (corrOrder?.available_compatible_units?.length ?? 0) > 0;
-                    const isShortfall = (req.units_covered ?? 0) < req.units_requested;
-                    if (hasCompatible && isShortfall && req.status !== 'FULFILLED' && req.status !== 'CANCELLED') {
-                      return (
-                        <button
-                          id={`btn-city-dispatch-${req.id.slice(0, 8)}`}
-                          onClick={() => handleAcceptOrder(req.id, true)}
-                          disabled={acceptingId === req.id || dispatchingId === req.id}
-                          className="btn btn-cyan"
-                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
-                        >
-                          <Truck size={13} />
-                          {acceptingId === req.id ? 'Dispatching...' : 'Accept & Dispatch Stock'}
-                        </button>
-                      );
-                    }
-                    return null;
-                  })()}
-                  <span className={`badge ${
-                    req.status === 'FULFILLED' ? 'badge-green' :
-                    req.status === 'COMMITTED_IN_TRANSIT' ? 'badge-cyan' :
-                    req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'badge-amber' :
-                    'badge-red'
-                  }`}>
-                    {req.status === 'FULFILLED' ? 'Delivered' :
-                     req.status === 'COMMITTED_IN_TRANSIT' ? 'En Route' :
-                     req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'Asking Donors' :
-                     req.status === 'PENDING_EVALUATION' ? 'Searching...' :
-                     req.status}
-                  </span>
-                </div>
+                {(hasMoreReqs || totalReqs > PAGE_SIZE) && (
+                  <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleReqs.length} of {totalReqs} requests</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      {totalReqs > 10 ? (
+                        Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
+                          <button key={p} onClick={() => setRequestsPage(p)} className={`btn ${requestsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                        ))
+                      ) : hasMoreReqs ? (
+                        <button onClick={() => setRequestsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
+            );
+          })()
         )}
       </div>
 
@@ -1067,172 +956,297 @@ export const BloodBankDashboard: React.FC = () => {
             No volunteers are currently active and available.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            {displayedDonors.map(({ donor, activeDispatch }) => (
-              <div key={donor.id} style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.2rem' }}>
-                    {donor.blood_group} Volunteer (Reliability: {Math.round(donor.reliability_score * 100)}%)
+          (() => {
+            const totalDonors = displayedDonors.length;
+            const visibleDonors = displayedDonors.slice(0, donorsPage * PAGE_SIZE);
+            const hasMoreDonors = totalDonors > visibleDonors.length;
+            const totalDonorPages = Math.ceil(totalDonors / PAGE_SIZE);
+            return (
+              <div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  {visibleDonors.map(({ donor, activeDispatch }, index) => (
+                    <div key={donor.id} style={{ background: 'var(--color-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                          <span style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{(donorsPage - 1) * PAGE_SIZE + index + 1}</span>
+                          <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                            {donor.blood_group} Volunteer (Reliability: {Math.round(donor.reliability_score * 100)}%)
+                          </span>
+                        </div>
+                        {activeDispatch ? (
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            Matched for Request {activeDispatch.request.id.slice(0, 8)} | Status: <b style={{ color: 'var(--color-success)' }}>{activeDispatch.allocation.status.replace('_', ' ')}</b>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Currently On Standby</div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        {activeDispatch ? (
+                          <div className="badge badge-green">Dispatched</div>
+                        ) : (
+                          <div className="badge" style={{ background: 'var(--color-surface)', color: 'var(--text-muted)' }}>Available</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {(hasMoreDonors || totalDonors > PAGE_SIZE) && (
+                  <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleDonors.length} of {totalDonors} donors</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      {totalDonors > 10 ? (
+                        Array.from({ length: totalDonorPages }, (_, i) => i + 1).map((p) => (
+                          <button key={p} onClick={() => setDonorsPage(p)} className={`btn ${donorsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                        ))
+                      ) : hasMoreDonors ? (
+                        <button onClick={() => setDonorsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
+                      ) : null}
+                    </div>
                   </div>
-                  {activeDispatch ? (
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      Matched for Request {activeDispatch.request.id.slice(0, 8)} | Status: <b style={{ color: 'var(--color-success)' }}>{activeDispatch.allocation.status.replace('_', ' ')}</b>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      Currently On Standby
-                    </div>
-                  )}
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  {activeDispatch ? (
-                    <div className="badge badge-green">Dispatched</div>
-                  ) : (
-                    <div className="badge" style={{ background: 'var(--color-surface)', color: 'var(--text-muted)' }}>Available</div>
-                  )}
-                </div>
+                )}
               </div>
-            ))}
-          </div>
+            );
+          })()
         )}
       </div>
 
       {/* Inventory Stock Table */}
       <div className="glass-panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <h2 style={{ fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Droplet size={20} color="var(--crimson-500)" />
-            All Blood Bags in Cold Storage
-          </h2>
-          <button onClick={fetchInventoryAndOrders} className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>
-            <RefreshCw size={14} className={loading ? 'spin' : ''} />
-            Refresh
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <h2 style={{ fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Droplet size={20} color="var(--crimson-500)" />
+              All Blood Bags in Cold Storage
+            </h2>
+            <span className="badge badge-cyan">{units.length} Total Units</span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              onClick={() => {
+                setModalTab('BATCH_GENERATOR');
+                setShowAddModal(true);
+              }}
+              className="btn btn-cyan"
+              style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+            >
+              <Layers size={14} />
+              + Batch Add
+            </button>
+            <button onClick={fetchInventoryAndOrders} className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>
+              <RefreshCw size={14} className={loading ? 'spin' : ''} />
+              Refresh
+            </button>
+          </div>
         </div>
 
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)', userSelect: 'none' }}>
-                <th style={{ padding: '0.75rem', cursor: 'pointer' }} onClick={() => handleInvSort('batch')}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                    BAG CODE {invSortKey === 'batch' ? (invSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                  </span>
-                </th>
-                <th style={{ padding: '0.75rem', cursor: 'pointer' }} onClick={() => handleInvSort('group')}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                    BLOOD GROUP {invSortKey === 'group' ? (invSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                  </span>
-                </th>
-                <th style={{ padding: '0.75rem', cursor: 'pointer' }} onClick={() => handleInvSort('type')}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                    TYPE {invSortKey === 'type' ? (invSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                  </span>
-                </th>
-                <th style={{ padding: '0.75rem', cursor: 'pointer' }} onClick={() => handleInvSort('volume')}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                    VOLUME {invSortKey === 'volume' ? (invSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                  </span>
-                </th>
-                <th style={{ padding: '0.75rem' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                    NO. OF PACKETS
-                  </span>
-                </th>
-                <th style={{ padding: '0.75rem', cursor: 'pointer' }} onClick={() => handleInvSort('expiry')}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                    EXPIRY DATE {invSortKey === 'expiry' ? (invSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                  </span>
-                </th>
-                <th style={{ padding: '0.75rem', cursor: 'pointer' }} onClick={() => handleInvSort('status')}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                    STATUS {invSortKey === 'status' ? (invSortAsc ? <ChevronUp size={13} /> : <ChevronDown size={13} />) : <ArrowUpDown size={12} style={{ opacity: 0.4 }} />}
-                  </span>
-                </th>
+              <tr style={{ borderBottom: '1px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
+                <th style={{ padding: '0.75rem' }}>#</th>
+                <th style={{ padding: '0.75rem' }}>BAG CODE</th>
+                <th style={{ padding: '0.75rem' }}>BLOOD GROUP</th>
+                <th style={{ padding: '0.75rem' }}>TYPE</th>
+                <th style={{ padding: '0.75rem' }}>VOLUME</th>
+                <th style={{ padding: '0.75rem' }}>EXPIRY DATE</th>
+                <th style={{ padding: '0.75rem' }}>STATUS</th>
                 <th style={{ padding: '0.75rem', textAlign: 'right' }}>TEST BAG DAMAGE / ACTIONS</th>
               </tr>
             </thead>
             <tbody>
-              {sortedUnits.map((unit) => {
-                const isLocked = unit.status === 'LOCKED_RESERVE';
-
+              {(() => {
+                const totalUnits = units.length;
+                const visibleUnits = unitsPage === -1 ? units : units.slice(0, unitsPage * PAGE_SIZE);
+                const hasMoreUnits = unitsPage !== -1 && totalUnits > visibleUnits.length;
+                const totalUnitPages = Math.ceil(totalUnits / PAGE_SIZE);
                 return (
-                  <tr
-                    key={unit.id}
-                    id={`unit-row-${unit.batch_number.toLowerCase()}`}
-                    style={{
-                      borderBottom: '1px solid var(--color-border)',
-                      background: isLocked ? 'rgba(217, 119, 6, 0.06)' : 'transparent',
-                    }}
-                  >
-                    <td style={{ padding: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                      {unit.batch_number}
-                    </td>
-                    <td style={{ padding: '0.75rem', fontWeight: 700, color: 'var(--text-main)' }}>{unit.blood_group}</td>
-                    <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.component_type === 'PRBC' ? 'Red Blood Cells' : unit.component_type}</td>
-                    <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.volume_ml} mL</td>
-                    <td style={{ padding: '0.75rem' }}>
-                      <span className="badge badge-cyan" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem' }}>
-                        <Package size={13} />
-                        1 Packet
-                      </span>
-                    </td>
-                    <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>
-                      {new Date(unit.expiry_date).toLocaleDateString()}
-                    </td>
-                    <td style={{ padding: '0.75rem' }}>
-                      <span className={`badge ${
-                        unit.status === 'AVAILABLE'
-                          ? 'badge-green'
-                          : unit.status === 'LOCKED_RESERVE'
-                          ? 'badge-amber'
-                          : unit.status === 'DISPATCHED'
-                          ? 'badge-cyan'
-                          : 'badge-red'
-                      }`}>
-                        {unit.status === 'AVAILABLE'
-                          ? 'Ready'
-                          : unit.status === 'LOCKED_RESERVE'
-                          ? 'Reserved'
-                          : unit.status === 'DISPATCHED'
-                          ? 'Dispatched'
-                          : unit.status === 'EXPIRED'
-                          ? 'Expired'
-                          : 'Damaged'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '0.75rem', textAlign: 'right' }}>
-                      {unit.status !== 'QUARANTINED' && unit.status !== 'EXPIRED' && (
-                        <button
-                          id={`btn-quarantine-${unit.batch_number.toLowerCase()}`}
-                          onClick={() => handleStatusChange(unit.id, 'QUARANTINED')}
-                          className="btn btn-danger-outline"
-                          style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
-                          title="Simulate bag damage to see system find replacement"
-                        >
-                          <AlertTriangle size={13} />
-                          Mark Damaged
-                        </button>
-                      )}
-                      {unit.status === 'QUARANTINED' && (
-                        <button
-                          onClick={() => handleStatusChange(unit.id, 'AVAILABLE')}
-                          className="btn btn-secondary"
-                          style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
-                        >
-                          Restore to Ready
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                  <>
+                    {visibleUnits.map((unit, index) => {
+                      const isLocked = unit.status === 'LOCKED_RESERVE';
+                      return (
+                        <tr key={unit.id} id={`unit-row-${unit.batch_number.toLowerCase()}`} style={{ borderBottom: '1px solid var(--color-border)', background: isLocked ? 'rgba(217, 119, 6, 0.06)' : 'transparent' }}>
+                          <td style={{ padding: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-dim)', fontSize: '0.78rem' }}>#{(unitsPage === -1 ? 0 : (unitsPage - 1) * PAGE_SIZE) + index + 1}</td>
+                          <td style={{ padding: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{unit.batch_number}</td>
+                          <td style={{ padding: '0.75rem', fontWeight: 700, color: 'var(--text-main)' }}>{unit.blood_group}</td>
+                          <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.component_type === 'PRBC' ? 'Red Blood Cells' : unit.component_type}</td>
+                          <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{unit.volume_ml} mL</td>
+                          <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{new Date(unit.expiry_date).toLocaleDateString()}</td>
+                          <td style={{ padding: '0.75rem' }}>
+                            <span className={`badge ${
+                              unit.status === 'AVAILABLE' ? 'badge-green' :
+                              unit.status === 'LOCKED_RESERVE' ? 'badge-amber' :
+                              unit.status === 'DISPATCHED' ? 'badge-cyan' : 'badge-red'
+                            }`}>
+                              {unit.status === 'AVAILABLE' ? 'Ready' : unit.status === 'LOCKED_RESERVE' ? 'Reserved' : unit.status === 'DISPATCHED' ? 'Dispatched' : unit.status === 'EXPIRED' ? 'Expired' : 'Damaged'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.75rem', textAlign: 'right' }}>
+                            {unit.status !== 'QUARANTINED' && unit.status !== 'EXPIRED' && (
+                              <button id={`btn-quarantine-${unit.batch_number.toLowerCase()}`} onClick={() => handleStatusChange(unit.id, 'QUARANTINED')} className="btn btn-danger-outline" style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }} title="Simulate bag damage">
+                                <AlertTriangle size={13} /> Mark Damaged
+                              </button>
+                            )}
+                            {unit.status === 'QUARANTINED' && (
+                              <button onClick={() => handleStatusChange(unit.id, 'AVAILABLE')} className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}>Restore to Ready</button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {(hasMoreUnits || totalUnits > PAGE_SIZE) && (
+                      <tr>
+                        <td colSpan={8} style={{ padding: '0.85rem', textAlign: 'center' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleUnits.length} of {totalUnits} bags</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              {totalUnits > 10 ? (
+                                <>
+                                  {Array.from({ length: totalUnitPages }, (_, i) => i + 1).map((p) => (
+                                    <button key={p} onClick={() => setUnitsPage(p)} className={`btn ${unitsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                                  ))}
+                                  <button onClick={() => setUnitsPage(-1)} className={`btn ${unitsPage === -1 ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem' }}>All</button>
+                                </>
+                              ) : hasMoreUnits ? (
+                                <button onClick={() => setUnitsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 );
-              })}
+              })()}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Add Unit Modal */}
+      {/* SECTION: AI Demand & Wastage Intelligence */}
+      <div className="glass-panel" style={{ marginBottom: '1.75rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <Sparkles size={22} color="var(--color-info)" />
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-main)', margin: 0 }}>AI Demand &amp; Wastage Intelligence</h2>
+              <span className="badge badge-purple">{forecastSummary?.model_version || 'smartblood-ml-v1'}</span>
+            </div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              Next-day predictive decision support across 4 frozen ML models.
+              <span style={{ color: 'var(--color-success)', fontWeight: 600, marginLeft: '0.5rem' }}>● Advisory Only (Zero Lock Impact)</span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {['ALL', 'PRBC', 'PLATELETS', 'FFP'].map((comp) => (
+              <button key={comp} onClick={() => setComponentFilter(comp)} className={`btn ${componentFilter === comp ? 'btn-primary' : 'btn-secondary'}`} style={{ fontSize: '0.75rem', padding: '0.3rem 0.75rem' }}>
+                {comp === 'ALL' ? 'All Components' : comp}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* KPI Strip */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.85rem', marginBottom: '1.25rem' }}>
+          <div style={{ background: 'var(--color-bg)', padding: '0.85rem 1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>NEXT-DAY PROJECTED DEMAND</div>
+            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-info)', marginTop: '0.2rem' }}>
+              {Math.ceil(forecasts.reduce((sum, f) => sum + f.predicted_demand, 0))} <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Units</span>
+            </div>
+          </div>
+          <div style={{ background: 'var(--color-bg)', padding: '0.85rem 1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>CRITICAL SHORTAGE ALERTS</div>
+            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--crimson-500)', marginTop: '0.2rem' }}>
+              {forecastSummary?.critical_shortage_count ?? forecasts.filter((f) => f.operational_status === 'Critical Shortage').length}
+            </div>
+          </div>
+          <div style={{ background: 'var(--color-bg)', padding: '0.85rem 1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>HIGH WASTAGE / EXPIRY RISKS</div>
+            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--amber-500)', marginTop: '0.2rem' }}>
+              {forecastSummary?.high_wastage_risk_count ?? forecasts.filter((f) => f.operational_status === 'High Wastage Risk').length}
+            </div>
+          </div>
+          <div style={{ background: 'var(--color-bg)', padding: '0.85rem 1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>DEMAND SPIKE RISKS (&ge;10)</div>
+            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--amber-500)', marginTop: '0.2rem' }}>
+              {forecastSummary?.demand_spike_risk_count ?? forecasts.filter((f) => f.is_spike_predicted).length}
+            </div>
+          </div>
+        </div>
+        {/* Forecast Table */}
+        {forecasts.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', background: 'var(--color-bg)', borderRadius: '8px', border: '1px dashed var(--border-subtle)' }}>
+            <RefreshCw size={24} className="spin" style={{ marginBottom: '0.5rem', color: 'var(--text-dim)' }} />
+            <div>Generating ML demand forecasts and coverage projections...</div>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
+                  <th style={{ padding: '0.65rem' }}>SERIES</th>
+                  <th style={{ padding: '0.65rem' }}>ON-SHELF READY</th>
+                  <th style={{ padding: '0.65rem' }}>EST. DEMAND (D+1)</th>
+                  <th style={{ padding: '0.65rem' }}>DAYS COVERAGE</th>
+                  <th style={{ padding: '0.65rem' }}>RISK SCORES</th>
+                  <th style={{ padding: '0.65rem' }}>OPERATIONAL STATUS</th>
+                  <th style={{ padding: '0.65rem' }}>AI ACTION ADVISORY</th>
+                </tr>
+              </thead>
+              <tbody>
+                {forecasts
+                  .filter((f) => componentFilter === 'ALL' || f.component_type === componentFilter)
+                  .map((f) => {
+                    const isCritical = f.operational_status === 'Critical Shortage';
+                    const isHighShortage = f.operational_status === 'High Shortage Risk';
+                    const isWastage = f.operational_status === 'High Wastage Risk';
+                    const isSpike = f.operational_status === 'Demand Spike Risk';
+                    const statusBadgeClass = isCritical ? 'badge-red' : isHighShortage ? 'badge-amber' : isWastage ? 'badge-purple' : isSpike ? 'badge-amber' : f.operational_status === 'Monitor Inventory' ? 'badge-cyan' : 'badge-green';
+                    return (
+                      <tr key={`${f.blood_group}-${f.component_type}`} style={{ borderBottom: '1px solid var(--border-subtle)', background: isCritical ? 'rgba(239, 68, 68, 0.04)' : isWastage ? 'rgba(126, 34, 206, 0.04)' : 'transparent' }}>
+                        <td style={{ padding: '0.65rem' }}>
+                          <span style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '0.95rem' }}>{f.blood_group}</span>{' '}
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>({f.component_type})</span>
+                        </td>
+                        <td style={{ padding: '0.65rem', fontWeight: 700 }}>
+                          <span style={{ color: f.closing_inventory === 0 ? 'var(--crimson-500)' : 'var(--text-main)' }}>{Math.round(f.closing_inventory)}</span>{' '}
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>units</span>
+                        </td>
+                        <td style={{ padding: '0.65rem' }}>
+                          <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{Math.ceil(f.predicted_demand)}{' '}<span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>units</span></div>
+                          {f.is_spike_predicted && (
+                            <div style={{ fontSize: '0.7rem', color: 'var(--amber-500)', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                              <TrendingUp size={11} /> Surge Headroom: {Math.ceil(f.spike_headroom_demand)}u
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '0.65rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ width: '45px', height: '6px', background: 'var(--border-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                              <div style={{ width: `${Math.min((f.predicted_coverage_days / 5) * 100, 100)}%`, height: '100%', background: f.predicted_coverage_days < 2 ? 'var(--crimson-500)' : f.predicted_coverage_days < 5 ? 'var(--amber-500)' : 'var(--emerald-500)' }} />
+                            </div>
+                            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: f.predicted_coverage_days < 2 ? 'var(--crimson-500)' : f.predicted_coverage_days < 5 ? 'var(--amber-500)' : 'var(--emerald-500)' }}>
+                              {f.predicted_coverage_days >= 99 ? '> 99d' : `${f.predicted_coverage_days.toFixed(1)}d`}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '0.65rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          <div>Spike: <b>{Math.round(f.spike_risk_score * 100)}%</b></div>
+                          <div>Wastage: <b style={{ color: f.wastage_risk_score >= 0.75 ? 'var(--crimson-500)' : 'inherit' }}>{Math.round(f.wastage_risk_score * 100)}%</b></div>
+                        </td>
+                        <td style={{ padding: '0.65rem' }}>
+                          <span className={`badge ${statusBadgeClass}`} style={{ fontSize: '0.72rem' }}>{f.operational_status}</span>
+                        </td>
+                        <td style={{ padding: '0.65rem', fontSize: '0.78rem', color: 'var(--text-main)', maxWidth: '280px' }}>{f.recommended_action}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Modern Batch & Single Blood Packets Modal */}
       {showAddModal && (
         <div style={{
           position: 'fixed',
@@ -1240,173 +1254,546 @@ export const BloodBankDashboard: React.FC = () => {
           left: 0,
           right: 0,
           bottom: 0,
-          background: 'rgba(0, 0, 0, 0.5)',
+          background: 'rgba(0, 0, 0, 0.65)',
           backdropFilter: 'blur(8px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 100,
+          zIndex: 1000,
           padding: '1rem',
         }}>
-          <div className="glass-panel" style={{ maxWidth: '520px', width: '100%', border: '1px solid rgba(6, 182, 212, 0.4)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1.25rem' }}>
-              <Package size={22} color="var(--cyan-400)" />
-              <h3 style={{ fontSize: '1.2rem', fontWeight: 800 }}>Log Verified Blood Packets</h3>
+          <div
+            className="glass-panel"
+            style={{
+              maxWidth: modalTab === 'MULTI_ROW' ? '740px' : '560px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              background: 'var(--color-surface)',
+              border: '1px solid var(--border-subtle)',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.25)',
+              borderRadius: '14px',
+              padding: '1.5rem',
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <div>
+                <h3 style={{ fontSize: '1.3rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Package size={22} color="var(--cyan-400)" />
+                  Add Blood Packets to Inventory
+                </h3>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                  Register cold-chain units into active storage. Batch additions trigger immediate re-planning for pending hospital requests.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="btn btn-secondary"
+                style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+              >
+                ✕
+              </button>
             </div>
 
-            <form onSubmit={handleAddUnit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <div>
-                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>Batch Number Prefix (optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. BB-005"
-                  className="input-field"
-                  value={newBatch}
-                  onChange={(e) => setNewBatch(e.target.value)}
-                />
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '0.25rem', display: 'block' }}>
-                  {newPacketsCount > 1
-                    ? `Packets will be indexed sequentially (e.g. ${newBatch.trim() || 'BB-XXXX'}-01 to -${String(newPacketsCount).padStart(2, '0')}).`
-                    : 'A unique batch code will be generated if left empty.'}
-                </span>
-              </div>
+            {/* Mode Tabs */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '0.5rem',
+              background: 'var(--color-bg)',
+              padding: '0.35rem',
+              borderRadius: '8px',
+              marginBottom: '1.25rem',
+            }}>
+              <button
+                type="button"
+                id="tab-batch-gen"
+                onClick={() => setModalTab('BATCH_GENERATOR')}
+                style={{
+                  padding: '0.55rem 0.5rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem',
+                  background: modalTab === 'BATCH_GENERATOR' ? 'var(--cyan-500)' : 'transparent',
+                  color: modalTab === 'BATCH_GENERATOR' ? '#fff' : 'var(--text-muted)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Layers size={14} />
+                Quick Batch (Qty)
+              </button>
+              <button
+                type="button"
+                id="tab-multi-row"
+                onClick={() => setModalTab('MULTI_ROW')}
+                style={{
+                  padding: '0.55rem 0.5rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem',
+                  background: modalTab === 'MULTI_ROW' ? 'var(--cyan-500)' : 'transparent',
+                  color: modalTab === 'MULTI_ROW' ? '#fff' : 'var(--text-muted)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Sparkles size={14} />
+                Multi-Type Batch
+              </button>
+              <button
+                type="button"
+                id="tab-single"
+                onClick={() => setModalTab('SINGLE')}
+                style={{
+                  padding: '0.55rem 0.5rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem',
+                  background: modalTab === 'SINGLE' ? 'var(--cyan-500)' : 'transparent',
+                  color: modalTab === 'SINGLE' ? '#fff' : 'var(--text-muted)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Plus size={14} />
+                Single Packet
+              </button>
+            </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            {/* TAB 1: Quick Batch Generator */}
+            {modalTab === 'BATCH_GENERATOR' && (
+              <form onSubmit={handleBatchGeneratorSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{
+                  background: 'rgba(6, 182, 212, 0.08)',
+                  border: '1px solid rgba(6, 182, 212, 0.25)',
+                  borderRadius: '8px',
+                  padding: '0.75rem 1rem',
+                  fontSize: '0.8rem',
+                  color: 'var(--color-info)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                }}>
+                  <Layers size={16} />
+                  <span>Batch log multiple identical blood packets with sequential barcode generation.</span>
+                </div>
+
+                {/* Quantity with quick buttons */}
                 <div>
-                  <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>Blood Group</label>
-                  <select
-                    className="select-field"
-                    value={newBloodGroup}
-                    onChange={(e) => setNewBloodGroup(e.target.value)}
-                  >
-                    {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
-                      <option key={bg} value={bg}>{bg}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>Component Type</label>
-                  <select
-                    className="select-field"
-                    value={newComponent}
-                    onChange={(e) => setNewComponent(e.target.value as BloodComponentType)}
-                  >
-                    <option value="PRBC">PRBC</option>
-                    <option value="WHOLE_BLOOD">Whole Blood</option>
-                    <option value="PLATELETS">Platelets</option>
-                    <option value="FFP">FFP</option>
-                    <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Number of Packets (Quantity to Keep in Storage) */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                  <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                    Number of Packets (Bags to Keep)
-                  </label>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--cyan-400)', fontWeight: 700 }}>
-                    {newPacketsCount} {newPacketsCount === 1 ? 'Packet' : 'Packets'} ({newPacketsCount * DEFAULT_UNIT_VOLUME_ML} mL)
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <input
-                    id="input-packets-count"
-                    type="number"
-                    min="1"
-                    max="100"
-                    className="input-field"
-                    style={{ fontWeight: 700, fontSize: '0.95rem', width: '100px' }}
-                    value={newPacketsCount}
-                    onChange={(e) => setNewPacketsCount(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
-                  />
-
-                  {/* Quick selection chips */}
-                  <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                    {[1, 2, 5, 10, 20].map((qty) => (
-                      <button
-                        key={qty}
-                        type="button"
-                        onClick={() => setNewPacketsCount(qty)}
-                        className={`badge ${newPacketsCount === qty ? 'badge-cyan' : ''}`}
-                        style={{
-                          background: newPacketsCount === qty ? 'var(--cyan-500, #06b6d4)' : 'var(--color-surface)',
-                          color: newPacketsCount === qty ? '#000' : 'var(--text-muted)',
-                          border: '1px solid var(--border-subtle)',
-                          cursor: 'pointer',
-                          padding: '0.35rem 0.65rem',
-                          fontWeight: 700,
-                          fontSize: '0.75rem',
-                        }}
-                      >
-                        +{qty} {qty === 1 ? 'Pkt' : 'Pkts'}
-                      </button>
-                    ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                      Quantity of Bags to Add *
+                    </label>
+                    <span className="badge badge-cyan" style={{ fontSize: '0.75rem', fontWeight: 800 }}>
+                      {batchQuantity} Bags
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      id="input-batch-quantity"
+                      type="number"
+                      min="1"
+                      max="100"
+                      className="input-field"
+                      value={batchQuantity}
+                      onChange={(e) => setBatchQuantity(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+                      style={{ maxWidth: '120px', fontWeight: 800, fontSize: '1.1rem' }}
+                      required
+                    />
+                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                      {[1, 5, 10, 20, 50].map((qty) => (
+                        <button
+                          key={qty}
+                          type="button"
+                          onClick={() => setBatchQuantity(qty)}
+                          className="btn btn-secondary"
+                          style={{
+                            padding: '0.3rem 0.6rem',
+                            fontSize: '0.75rem',
+                            fontWeight: batchQuantity === qty ? 800 : 500,
+                            borderColor: batchQuantity === qty ? 'var(--cyan-400)' : 'var(--border-subtle)',
+                            color: batchQuantity === qty ? 'var(--cyan-400)' : 'var(--text-muted)',
+                          }}
+                        >
+                          +{qty}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div>
-                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>Shelf Life (Days)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="365"
-                  className="input-field"
-                  value={newExpiryDays}
-                  onChange={(e) => setNewExpiryDays(Number(e.target.value))}
-                />
-              </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Blood Group</label>
+                    <select
+                      id="select-batch-blood-group"
+                      className="select-field"
+                      value={batchBloodGroup}
+                      onChange={(e) => setBatchBloodGroup(e.target.value)}
+                    >
+                      {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
+                        <option key={bg} value={bg}>{bg}</option>
+                      ))}
+                    </select>
+                  </div>
 
-              {/* Visual preview box */}
-              <div style={{
-                background: 'rgba(6, 182, 212, 0.08)',
-                border: '1px solid rgba(6, 182, 212, 0.25)',
-                borderRadius: '8px',
-                padding: '0.65rem 0.85rem',
-                fontSize: '0.8rem',
-                color: 'var(--cyan-300)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-              }}>
-                <Package size={16} />
-                <span>
-                  Adding <b>{newPacketsCount} {newPacketsCount === 1 ? 'Packet' : 'Packets'}</b> of <b>{newBloodGroup}</b> ({newComponent === 'PRBC' ? 'Red Blood Cells' : newComponent}) into cold storage.
-                </span>
-              </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Component Type</label>
+                    <select
+                      id="select-batch-component"
+                      className="select-field"
+                      value={batchComponent}
+                      onChange={(e) => {
+                        const comp = e.target.value as BloodComponentType;
+                        setBatchComponent(comp);
+                        setBatchExpiryDays(DEFAULT_EXPIRY_BY_COMPONENT[comp] || 42);
+                      }}
+                    >
+                      <option value="PRBC">PRBC (Packed Red Blood Cells)</option>
+                      <option value="WHOLE_BLOOD">Whole Blood</option>
+                      <option value="PLATELETS">Platelets</option>
+                      <option value="FFP">Fresh Frozen Plasma (FFP)</option>
+                      <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                    </select>
+                  </div>
+                </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddModal(false);
-                    setNewPacketsCount(1);
-                  }}
-                  disabled={registering}
-                  className="btn btn-secondary"
-                >
-                  Cancel
-                </button>
-                <button
-                  id="btn-submit-register-unit"
-                  type="submit"
-                  disabled={registering}
-                  className="btn btn-cyan"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-                >
-                  <Package size={15} />
-                  {registering
-                    ? 'Registering...'
-                    : `Register ${newPacketsCount} ${newPacketsCount === 1 ? 'Packet' : 'Packets'}`}
-                </button>
-              </div>
-            </form>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Batch Code Prefix</label>
+                    <input
+                      id="input-batch-prefix"
+                      type="text"
+                      placeholder="e.g. BB-DRIVE-"
+                      className="input-field"
+                      value={batchPrefix}
+                      onChange={(e) => setBatchPrefix(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Volume (mL)</label>
+                    <input
+                      type="number"
+                      min="50"
+                      max="1000"
+                      className="input-field"
+                      value={batchVolume}
+                      onChange={(e) => setBatchVolume(Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Shelf Life (Days)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="365"
+                      className="input-field"
+                      value={batchExpiryDays}
+                      onChange={(e) => setBatchExpiryDays(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                {/* Batch preview */}
+                <div style={{
+                  background: 'var(--color-bg)',
+                  border: '1px dashed var(--border-subtle)',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  fontSize: '0.8rem',
+                }}>
+                  <div style={{ color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.35rem' }}>
+                    Summary Preview:
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)', fontWeight: 700 }}>
+                    <span>{batchQuantity}x {batchBloodGroup} ({batchComponent}) @ {batchVolume} mL</span>
+                    <span>Total: {(batchQuantity * batchVolume).toLocaleString()} mL</span>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.35rem' }}>
+                    Codes: <code>{batchPrefix.trim() || 'BB-'}001</code> ... <code>{batchPrefix.trim() || 'BB-'}{batchQuantity < 10 ? `00${batchQuantity}` : `0${batchQuantity}`}</code> (expires in {batchExpiryDays} days)
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                  <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-secondary">
+                    Cancel
+                  </button>
+                  <button
+                    id="btn-submit-batch-gen"
+                    type="submit"
+                    disabled={submitting}
+                    className="btn btn-cyan"
+                    style={{ fontWeight: 800, padding: '0.55rem 1.25rem' }}
+                  >
+                    {submitting ? 'Registering Batch...' : `+ Batch Register ${batchQuantity} Blood Packets`}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* TAB 2: Multi-Type Donation Drive Table */}
+            {modalTab === 'MULTI_ROW' && (
+              <form onSubmit={handleMultiRowSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Add multiple blood types and quantities from donation drives or incoming shipments at once.
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => loadPreset('DRIVE')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      title="Load standard community drive distribution"
+                    >
+                      Drive Preset (24 Bags)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => loadPreset('TRAUMA')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      title="Load high emergency trauma stock"
+                    >
+                      Trauma Stock (25 Bags)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Rows Table */}
+                <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                    <thead>
+                      <tr style={{ background: 'var(--color-bg)', borderBottom: '1px solid var(--border-subtle)', textAlign: 'left', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '0.5rem 0.6rem' }}>BLOOD GROUP</th>
+                        <th style={{ padding: '0.5rem 0.6rem' }}>COMPONENT</th>
+                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>QTY</th>
+                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>VOL (mL)</th>
+                        <th style={{ padding: '0.5rem 0.6rem', width: '90px' }}>SHELF (d)</th>
+                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', width: '45px' }}>DEL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {multiRows.map((row) => (
+                        <tr key={row.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <select
+                              className="select-field"
+                              value={row.blood_group}
+                              onChange={(e) => updateMultiRow(row.id, 'blood_group', e.target.value)}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                            >
+                              {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
+                                <option key={bg} value={bg}>{bg}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <select
+                              className="select-field"
+                              value={row.component_type}
+                              onChange={(e) => updateMultiRow(row.id, 'component_type', e.target.value as BloodComponentType)}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                            >
+                              <option value="PRBC">PRBC</option>
+                              <option value="WHOLE_BLOOD">Whole Blood</option>
+                              <option value="PLATELETS">Platelets</option>
+                              <option value="FFP">FFP</option>
+                              <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                            </select>
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <input
+                              type="number"
+                              min="1"
+                              max="100"
+                              className="input-field"
+                              value={row.quantity}
+                              onChange={(e) => updateMultiRow(row.id, 'quantity', Math.max(1, Number(e.target.value) || 1))}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
+                            />
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <input
+                              type="number"
+                              min="50"
+                              max="1000"
+                              className="input-field"
+                              value={row.volume_ml}
+                              onChange={(e) => updateMultiRow(row.id, 'volume_ml', Number(e.target.value) || 450)}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                            />
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem' }}>
+                            <input
+                              type="number"
+                              min="1"
+                              max="365"
+                              className="input-field"
+                              value={row.expiry_days}
+                              onChange={(e) => updateMultiRow(row.id, 'expiry_days', Number(e.target.value) || 42)}
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+                            />
+                          </td>
+                          <td style={{ padding: '0.4rem 0.6rem', textAlign: 'center' }}>
+                            {multiRows.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeMultiRow(row.id)}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--crimson-500)',
+                                  cursor: 'pointer',
+                                  padding: '0.2rem',
+                                }}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={addMultiRow}
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                  >
+                    <Plus size={14} />
+                    + Add Blood Type Row
+                  </button>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                    Total Packets to Add: <span style={{ color: 'var(--cyan-400)', fontSize: '1.1rem' }}>{totalMultiRowBags} Bags</span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                  <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-secondary">
+                    Cancel
+                  </button>
+                  <button
+                    id="btn-submit-multi-row"
+                    type="submit"
+                    disabled={submitting || totalMultiRowBags === 0}
+                    className="btn btn-cyan"
+                    style={{ fontWeight: 800, padding: '0.55rem 1.25rem' }}
+                  >
+                    {submitting ? 'Registering...' : `+ Batch Register All ${totalMultiRowBags} Packets`}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* TAB 3: Single Unit Form */}
+            {modalTab === 'SINGLE' && (
+              <form onSubmit={handleAddSingleUnit} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Custom Barcode / Batch Number (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. BB-005"
+                    className="input-field"
+                    value={newBatch}
+                    onChange={(e) => setNewBatch(e.target.value)}
+                  />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Blood Group</label>
+                    <select
+                      className="select-field"
+                      value={newBloodGroup}
+                      onChange={(e) => setNewBloodGroup(e.target.value)}
+                    >
+                      {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
+                        <option key={bg} value={bg}>{bg}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Component Type</label>
+                    <select
+                      className="select-field"
+                      value={newComponent}
+                      onChange={(e) => {
+                        const comp = e.target.value as BloodComponentType;
+                        setNewComponent(comp);
+                        setNewExpiryDays(DEFAULT_EXPIRY_BY_COMPONENT[comp] || 42);
+                      }}
+                    >
+                      <option value="PRBC">PRBC</option>
+                      <option value="WHOLE_BLOOD">Whole Blood</option>
+                      <option value="PLATELETS">Platelets</option>
+                      <option value="FFP">FFP</option>
+                      <option value="CRYOPRECIPITATE">Cryoprecipitate</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Volume (mL)</label>
+                    <input
+                      type="number"
+                      min="50"
+                      max="1000"
+                      className="input-field"
+                      value={newVolume}
+                      onChange={(e) => setNewVolume(Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Shelf Life (Days)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="365"
+                      className="input-field"
+                      value={newExpiryDays}
+                      onChange={(e) => setNewExpiryDays(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem' }}>
+                  <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-secondary">
+                    Cancel
+                  </button>
+                  <button type="submit" disabled={submitting} className="btn btn-cyan">
+                    {submitting ? 'Registering...' : 'Register Single Unit'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
     </div>
   );
 };
+

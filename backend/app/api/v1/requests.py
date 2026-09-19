@@ -187,7 +187,10 @@ async def create_blood_request(
     allocation_svc = AllocationService(db)
     try:
         await allocation_svc.execute_allocation_pipeline(
-            blood_req.id, request=blood_req, hospital=hospital
+            blood_req.id,
+            request=blood_req,
+            hospital=hospital,
+            fulfillment_mode=req_in.fulfillment_mode or "AUTO",
         )
     except Exception:
         logger.exception("Allocation pipeline failed for request %s", blood_req.id)

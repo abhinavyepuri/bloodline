@@ -40,6 +40,10 @@ export const DonorDashboard: React.FC = () => {
   /** Alerts the donor has pushed aside, so the full-screen panel is not permanent. */
   const [dismissedAlertIds, setDismissedAlertIds] = useState<string[]>([]);
 
+  // Pagination for alerts
+  const PAGE_SIZE = 5;
+  const [alertsPage, setAlertsPage] = useState(1);
+
   // GPS & Telemetry Tracking State
   const [gpsSyncing, setGpsSyncing] = useState(false);
   const [gpsMessage, setGpsMessage] = useState<string | null>(null);
@@ -85,6 +89,8 @@ export const DonorDashboard: React.FC = () => {
 
   useEffect(() => {
     fetchDonorData();
+    const interval = setInterval(fetchDonorData, 4000);
+    return () => clearInterval(interval);
   }, [fetchDonorData, user]);
 
   useEffect(() => {

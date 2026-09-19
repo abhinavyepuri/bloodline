@@ -28,7 +28,12 @@ export const HospitalDashboard: React.FC = () => {
   const [units, setUnits] = useState(2);
   const [triageLevel, setTriageLevel] = useState<TriageLevel>('MASSIVE_TRANSFUSION_PROTOCOL');
   const [deadlineMinutes, setDeadlineMinutes] = useState(15);
+  const [fulfillmentMode, setFulfillmentMode] = useState<'AUTO' | 'DIRECT_DONOR'>('AUTO');
   const [submitting, setSubmitting] = useState(false);
+
+  // Pagination
+  const PAGE_SIZE = 5;
+  const [reqsPage, setReqsPage] = useState(1);
 
   // Proximity Alert State (PRD Section 4.1: Trauma Bay Push Notification within 500m)
   const [wardAlert, setWardAlert] = useState<{ message: string; timestamp: string } | null>(null);
@@ -56,9 +61,7 @@ export const HospitalDashboard: React.FC = () => {
 
   useEffect(() => {
     fetchRequests();
-    const interval = setInterval(() => {
-      fetchRequests();
-    }, 3000);
+    const interval = setInterval(fetchRequests, 4000);
     return () => clearInterval(interval);
   }, [fetchRequests, user]);
 
@@ -106,6 +109,7 @@ export const HospitalDashboard: React.FC = () => {
       units_requested: Number(units),
       triage_level: triageLevel,
       deadline_at: deadlineAt,
+      fulfillment_mode: fulfillmentMode,
     };
 
     try {
@@ -257,6 +261,21 @@ export const HospitalDashboard: React.FC = () => {
 
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
+              Fulfillment Strategy
+            </label>
+            <select
+              id="intake-fulfillment-mode"
+              className="select-field"
+              value={fulfillmentMode}
+              onChange={(e) => setFulfillmentMode(e.target.value as 'AUTO' | 'DIRECT_DONOR')}
+            >
+              <option value="AUTO">⚡ Auto-Match (Cold-Chain Inventory first, then Volunteer Donors)</option>
+              <option value="DIRECT_DONOR">🚨 Direct Volunteer Donor Dispatch (Broadcast to Live Donors immediately)</option>
+            </select>
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
               Needed Within (Minutes)
             </label>
             <input
@@ -369,203 +388,103 @@ export const HospitalDashboard: React.FC = () => {
             No active emergency blood requests. Submit an intake form to initiate automated matching.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {requests.map((req) => {
-              const urgency = req.calculated_urgency_score;
-              const isUrgent = urgency >= 80;
-              const covered = req.units_covered ?? 0;
-              const shortfall = req.units_shortfall ?? Math.max(req.units_requested - covered, 0);
-              const fullyCovered = shortfall === 0;
-              const isClosed = req.status === 'FULFILLED' || req.status === 'CANCELLED';
-              const inTransitCount = (req.allocations || []).filter(a => a.status === 'IN_TRANSIT').length;
-              const lockedCount = (req.allocations || []).filter(a => a.status === 'HARD_LOCKED').length;
+          (() => {
+            const totalReqs = requests.length;
+            const visibleReqs = requests.slice(0, reqsPage * PAGE_SIZE);
+            const hasMoreReqs = totalReqs > visibleReqs.length;
+            const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE);
+            return (
+              <div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {visibleReqs.map((req) => {
+                    const urgency = req.calculated_urgency_score;
+                    const isUrgent = urgency >= 80;
+                    const covered = req.units_covered ?? 0;
+                    const shortfall = req.units_shortfall ?? Math.max(req.units_requested - covered, 0);
+                    const fullyCovered = shortfall === 0;
+                    const isClosed = req.status === 'FULFILLED' || req.status === 'CANCELLED';
 
-              let statusBadgeClass = 'badge-cyan';
-              let statusBadgeText: string = req.status;
-              if (req.status === 'FULFILLED') {
-                statusBadgeClass = 'badge-purple';
-                statusBadgeText = 'Delivered & Transfused';
-              } else if (req.status === 'COMMITTED_IN_TRANSIT') {
-                statusBadgeClass = 'badge-green';
-                statusBadgeText = 'All Units En Route';
-              } else if (inTransitCount > 0) {
-                statusBadgeClass = 'badge-green';
-                statusBadgeText = `🚑 ${inTransitCount}/${req.units_requested} Bags In-Transit`;
-              } else if (lockedCount > 0) {
-                statusBadgeClass = 'badge-cyan';
-                statusBadgeText = `📦 ${lockedCount}/${req.units_requested} Bags Reserved in Storage`;
-              } else if (req.status === 'RE_PLANNING') {
-                statusBadgeClass = 'badge-red';
-                statusBadgeText = 'Finding Replacement';
-              } else if (req.status === 'PROXIMITY_ZONE_NOTIFIED') {
-                statusBadgeClass = 'badge-amber';
-                statusBadgeText = 'Asking Donors';
-              }
-
-              return (
-                <div
-                  key={req.id}
-                  id={`request-card-${req.id}`}
-                  className={`glass-panel ${req.status === 'RE_PLANNING' ? 'highlight-red' : ''}`}
-                  style={{
-                    borderLeft: `4px solid ${
-                      req.status === 'COMMITTED_IN_TRANSIT' || inTransitCount > 0
-                        ? 'var(--emerald-500)'
-                        : req.status === 'RE_PLANNING'
-                        ? 'var(--crimson-500)'
-                        : lockedCount > 0
-                        ? 'var(--cyan-500)'
-                        : 'var(--amber-500)'
-                    }`,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
-                          {req.units_requested}x {req.required_blood_group} ({COMPONENT_LABELS[req.component_type] ?? req.component_type})
-                        </span>
-                        <span className={`badge ${statusBadgeClass}`}>
-                          {statusBadgeText}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        Patient: <code>{req.patient_id_token}</code>
-                      </div>
-                    </div>
-
-                    {/* Urgency Meter */}
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>URGENCY LEVEL</div>
-                      <div style={{ fontSize: '1.4rem', fontWeight: 800, color: isUrgent ? 'var(--crimson-500)' : 'var(--cyan-400)' }}>
-                        {urgency.toFixed(0)} <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>/ 100</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Coverage — bags secured out of bags asked for. */}
-                  <div style={{ marginTop: '0.9rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '0.3rem' }}>
-                      <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>
-                        Bags secured: {covered} of {req.units_requested}
-                      </span>
-                      {!fullyCovered && !isClosed && (
-                        <span style={{ color: 'var(--amber-500)', fontWeight: 700 }}>
-                          Still need {shortfall}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ height: '6px', background: 'var(--color-bg)', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%',
-                        width: `${Math.min(100, (covered / Math.max(req.units_requested, 1)) * 100)}%`,
-                        background: fullyCovered ? 'var(--emerald-500)' : 'var(--amber-500)',
-                        transition: 'width 0.3s ease',
-                      }} />
-                    </div>
-                  </div>
-
-                  {/* Allocations Breakdown */}
-                  {req.allocations && req.allocations.length > 0 && (
-                    <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.5rem', textTransform: 'uppercase' }}>
-                        Where This Blood Is Coming From:
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
-                        {req.allocations.map((alloc) => {
-                          const isInventory = alloc.source_type === 'BLOOD_BANK_INVENTORY';
-                          const batchDisplay = alloc.batch_number || (alloc.inventory_unit_id ? `Bag-${alloc.inventory_unit_id.slice(0, 6)}` : null);
-                          const bloodGroupDisplay = alloc.blood_group || req.required_blood_group;
-
-                          let badgeText = 'Confirmed';
-                          let badgeClass = 'badge-green';
-                          if (alloc.status === 'IN_TRANSIT') {
-                            badgeText = `In Transit (~${alloc.estimated_transit_minutes ?? 5} min)`;
-                            badgeClass = 'badge-green';
-                          } else if (alloc.status === 'HARD_LOCKED') {
-                            badgeText = isInventory ? 'Packed in Cold Storage' : 'Donor Confirmed';
-                            badgeClass = 'badge-cyan';
-                          } else if (alloc.status === 'COMPLETED') {
-                            badgeText = 'Received & Transfused';
-                            badgeClass = 'badge-purple';
-                          }
-
-                          return (
-                            <div
-                              key={alloc.id}
-                              style={{
-                                background: 'var(--color-bg)',
-                                padding: '0.55rem 0.85rem',
-                                borderRadius: '8px',
-                                border: alloc.status === 'IN_TRANSIT' ? '1px solid var(--emerald-500)' : '1px solid var(--border-subtle)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.5rem',
-                                fontSize: '0.8rem',
-                              }}
-                            >
-                              {isInventory ? (
-                                alloc.status === 'IN_TRANSIT' ? <Truck size={14} color="var(--emerald-400)" /> : <Package size={14} color="var(--cyan-400)" />
-                              ) : (
-                                <Droplet size={14} color="var(--crimson-400)" />
-                              )}
-                              <span>
-                                <b>
-                                  {isInventory ? (
-                                    `📦 Blood Bank ${batchDisplay ? `(${batchDisplay})` : 'Storage'} [${bloodGroupDisplay}]`
-                                  ) : (
-                                    `🙋 Volunteer Donor [${bloodGroupDisplay}]`
-                                  )}
-                                </b>
-                                {alloc.distance_km != null && ` (~${alloc.distance_km}km away)`}
+                    return (
+                      <div key={req.id} id={`request-card-${req.id}`} className={`glass-panel ${req.status === 'RE_PLANNING' ? 'highlight-red' : ''}`} style={{ borderLeft: `4px solid ${ req.status === 'COMMITTED_IN_TRANSIT' ? 'var(--emerald-500)' : req.status === 'RE_PLANNING' ? 'var(--crimson-500)' : req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'var(--amber-500)' : 'var(--cyan-500)' }` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                                {req.units_requested}x {req.required_blood_group} ({COMPONENT_LABELS[req.component_type] ?? req.component_type})
                               </span>
-                              <span className={`badge ${badgeClass}`} style={{ fontSize: '0.65rem' }}>
-                                {badgeText}
+                              <span className={`badge ${ req.status === 'COMMITTED_IN_TRANSIT' ? 'badge-green' : req.status === 'RE_PLANNING' ? 'badge-red' : req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'badge-amber' : req.status === 'FULFILLED' ? 'badge-purple' : 'badge-cyan' }`}>
+                                {req.status === 'COMMITTED_IN_TRANSIT' ? 'On The Way' : req.status === 'RE_PLANNING' ? 'Finding Replacement' : req.status === 'PROXIMITY_ZONE_NOTIFIED' ? 'Asking Donors' : req.status === 'FULFILLED' ? 'Delivered' : req.status}
                               </span>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Patient: <code>{req.patient_id_token}</code></div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>URGENCY LEVEL</div>
+                            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: isUrgent ? 'var(--crimson-500)' : 'var(--cyan-400)' }}>
+                              {urgency.toFixed(0)} <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>/ 100</span>
+                            </div>
+                          </div>
+                        </div>
 
-                  {/* Actions */}
-                  <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    <button
-                      id={`btn-explain-${req.id}`}
-                      onClick={() => viewExplanation(req.id)}
-                      className="btn btn-secondary"
-                      style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
-                    >
-                      <Info size={14} />
-                      Why this choice?
-                    </button>
-                    {!isClosed && (
-                      <button
-                        id={`btn-cancel-${req.id}`}
-                        onClick={() => handleCancel(req.id)}
-                        className="btn btn-secondary"
-                        style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
-                      >
-                        Cancel Request
-                      </button>
-                    )}
-                    {!isClosed && (inTransitCount > 0 || covered > 0) && (
-                      <button
-                        id={`btn-fulfill-${req.id}`}
-                        onClick={() => handleFulfill(req.id, !fullyCovered)}
-                        className="btn btn-cyan"
-                        style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
-                      >
-                        <CheckCircle2 size={14} />
-                        {fullyCovered ? 'Confirm Blood Received' : `Confirm Receipt & Transfuse (${covered} Available)`}
-                      </button>
-                    )}
-                  </div>
+                        <div style={{ marginTop: '0.9rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '0.3rem' }}>
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Bags secured: {covered} of {req.units_requested}</span>
+                            {!fullyCovered && !isClosed && (<span style={{ color: 'var(--amber-500)', fontWeight: 700 }}>Still need {shortfall}</span>)}
+                          </div>
+                          <div style={{ height: '6px', background: 'var(--color-bg)', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${Math.min(100, (covered / Math.max(req.units_requested, 1)) * 100)}%`, background: fullyCovered ? 'var(--emerald-500)' : 'var(--amber-500)', transition: 'width 0.3s ease' }} />
+                          </div>
+                        </div>
+
+                        {req.allocations && req.allocations.length > 0 && (
+                          <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.5rem', textTransform: 'uppercase' }}>Where This Blood Is Coming From:</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+                              {req.allocations.map((alloc) => (
+                                <div key={alloc.id} style={{ background: 'var(--color-bg)', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem' }}>
+                                  <Truck size={14} color="var(--emerald-400)" />
+                                  <span><b>{alloc.source_type === 'BLOOD_BANK_INVENTORY' ? '📦 From Blood Bank Storage' : '🙋 From Volunteer Donor'}</b>{alloc.distance_km != null && ` (~${alloc.distance_km}km away, ETA ~${alloc.estimated_transit_minutes} min)`}</span>
+                                  <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>Confirmed</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
+                          <button id={`btn-explain-${req.id}`} onClick={() => viewExplanation(req.id)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}>
+                            <Info size={14} /> Why this choice?
+                          </button>
+                          {!isClosed && (
+                            <button id={`btn-cancel-${req.id}`} onClick={() => handleCancel(req.id)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}>Cancel Request</button>
+                          )}
+                          {req.status === 'COMMITTED_IN_TRANSIT' && fullyCovered && (
+                            <button id={`btn-fulfill-${req.id}`} onClick={() => handleFulfill(req.id)} className="btn btn-cyan" style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}>
+                              <CheckCircle2 size={14} /> Confirm Blood Received
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
+                {(hasMoreReqs || totalReqs > PAGE_SIZE) && (
+                  <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Showing {visibleReqs.length} of {totalReqs} requests</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      {totalReqs > 10 ? (
+                        Array.from({ length: totalReqPages }, (_, i) => i + 1).map((p) => (
+                          <button key={p} onClick={() => setReqsPage(p)} className={`btn ${reqsPage === p ? 'btn-primary' : 'btn-secondary'}`} style={{ minWidth: '32px', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}>{p}</button>
+                        ))
+                      ) : hasMoreReqs ? (
+                        <button onClick={() => setReqsPage(p => p + 1)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '0.3rem 0.85rem' }}>Show More</button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()
         )}
       </div>
 
