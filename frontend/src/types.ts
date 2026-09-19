@@ -182,3 +182,66 @@ export interface AdminMetrics {
   total_requests_processed: number;
   average_transit_distance_km: number;
 }
+
+export type OperationalRiskStatus =
+  | 'Critical Shortage'
+  | 'High Shortage Risk'
+  | 'High Wastage Risk'
+  | 'Demand Spike Risk'
+  | 'Monitor Inventory'
+  | 'Stable';
+
+export interface SeriesForecast {
+  blood_bank_id: string;
+  blood_bank_name: string;
+  blood_group: string;
+  component_type: BloodComponentType;
+  target_date: string;
+  closing_inventory: number;
+  predicted_demand: number;
+  spike_headroom_demand: number;
+  is_spike_predicted: boolean;
+  predicted_coverage_days: number;
+  spike_risk_score: number;
+  inventory_risk_score: number;
+  wastage_risk_score: number;
+  analytical_risk_score: number;
+  risk_band: 'Very Low' | 'Low' | 'Medium' | 'High' | 'Very High';
+  operational_status: OperationalRiskStatus;
+  risk_level: 'Critical' | 'High' | 'Medium' | 'Low';
+  recommended_action: string;
+  safety_stock: number;
+  surplus_units: number;
+  deficit_units: number;
+  evaluation_source: string;
+  ml_supported: boolean;
+}
+
+export interface PredictionSummary {
+  total_series_evaluated: number;
+  critical_shortage_count: number;
+  high_shortage_risk_count: number;
+  high_wastage_risk_count: number;
+  demand_spike_risk_count: number;
+  monitor_inventory_count: number;
+  stable_count: number;
+  active_transfer_recommendations_count: number;
+  model_version: string;
+}
+
+export interface TransferRecommendation {
+  donor_bank_id: string;
+  donor_bank_name: string;
+  receiver_bank_id: string;
+  receiver_bank_name: string;
+  blood_group: string;
+  component_type: BloodComponentType;
+  recommended_units: number;
+  donor_wastage_risk: number;
+  receiver_risk_score: number;
+  receiver_deficit: number;
+  remaining_deficit: number;
+  distance_km?: number;
+  status: string;
+  recommended_action: string;
+}
