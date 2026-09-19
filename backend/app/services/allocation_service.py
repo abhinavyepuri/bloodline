@@ -582,28 +582,42 @@ class AllocationService:
         if donor.blood_group not in self._compatible_groups_for(request):
             raise IncompatibleBloodTypeError(
                 donor.blood_group, request.required_blood_group
-            )
+            )        # Idempotent: a donor who already holds a slot is not given a second one.
+        existing_slots = await lock_mgr.donor_slots(canonical_id, donor_id, request.units_requested)
+        if existing_slots:
+            return {
+                "status": "ALREADY_CLAIMED",
+                "donor_id": donor_id,
+                "slot": existing_slots[0],
+                "slots": existing_slots,
+            }
 
-        # Shortfall calculation to cap claimed bags
-        covered_before = await self.covered_unit_count(canonical_id)
-        shortfall_before = max(0, request.units_requested - covered_before)
-        if shortfall_before <= 0:
+        # Calculate current coverage and shortfall
+        current_covered = await self.covered_unit_count(canonical_id)
+        shortfall = max(0, request.units_requested - current_covered)
+        if shortfall <= 0:
             raise AllocationRaceConditionError(canonical_id)
 
-        bags_to_claim = max(1, min(bags_offered, shortfall_before))
-        claimed_slots = await lock_mgr.claim_unit_slots(canonical_id, donor_id, request.units_requested, count=bags_to_claim)
+        # Cap the requested bags at the remaining shortfall
+        num_to_claim = min(max(1, bags_offered), shortfall)
+
+        claimed_slots = await lock_mgr.claim_unit_slots(
+            canonical_id, donor_id, request.units_requested, count=num_to_claim
+        )
         if not claimed_slots:
             # Every unit slot is taken by other donors.
             raise AllocationRaceConditionError(canonical_id)
+
+        slot = claimed_slots[0]
 
         try:
             hospital = await self.db.get(Hospital, request.hospital_id)
             distance_km = self._donor_distance_km(donor, hospital)
             eta_minutes = estimate_eta_minutes(distance_km, DONOR_PREPARATION_MINUTES)
 
-            allocations = []
+            created_allocations = []
             for _ in claimed_slots:
-                alloc = Allocation(
+                allocation = Allocation(
                     request_id=canonical_id,
                     source_type=AllocationSourceType.LIVE_DONOR,
                     donor_id=donor_id,
@@ -612,8 +626,9 @@ class AllocationService:
                     estimated_transit_minutes=eta_minutes,
                     allocated_at=datetime.now(timezone.utc),
                 )
-                self.db.add(alloc)
-                allocations.append(alloc)
+                self.db.add(allocation)
+                created_allocations.append(allocation)
+
             await self.db.flush()
 
             covered = await self.covered_unit_count(canonical_id)
@@ -652,8 +667,7 @@ class AllocationService:
             await self.db.commit()
         except Exception:
             # Clean up claimed slots from Redis to prevent lock leaking on unexpected DB errors
-            for s in claimed_slots:
-                await redis_conn.delete(lock_mgr._slot_key(canonical_id, s))
+            await lock_mgr.release_donor_slots(canonical_id, donor_id, request.units_requested)
             raise
 
         manager.dispatch(
@@ -744,12 +758,13 @@ class AllocationService:
                 )
             )
 
-
         return {
             "status": "HARD_LOCKED_COMMITTED",
-            "allocation_id": allocations[0].id if allocations else None,
+            "allocation_id": created_allocations[0].id if created_allocations else None,
             "donor_id": donor_id,
-            "slot": claimed_slots[0] if claimed_slots else None,
+            "slot": slot,
+            "slots": claimed_slots,
+            "bags_claimed": len(claimed_slots),nges
             "distance_km": distance_km,
             "estimated_transit_minutes": eta_minutes,
             "units_covered": covered,

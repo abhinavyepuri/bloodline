@@ -61,6 +61,7 @@ class DonorRespondOut(BaseModel):
     allocation_id: Optional[str] = None
     donor_id: Optional[str] = None
     slot: Optional[int] = Field(None, description="Zero-based unit slot this donor claimed")
+    bags_claimed: Optional[int] = Field(None, description="Number of units/bags claimed by the donor")
     distance_km: Optional[float] = None
     estimated_transit_minutes: Optional[float] = None
     units_covered: Optional[int] = Field(None, description="Units secured for the request so far")
