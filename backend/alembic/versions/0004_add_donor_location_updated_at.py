@@ -7,19 +7,17 @@ Create Date: 2026-09-19
 
 from typing import Sequence, Union
 from alembic import op
-import sqlalchemy as sa
 
-revision: str = "0004_add_donor_location_updated_at"
+revision: str = "0004_donor_location_freshness"
 down_revision: Union[str, None] = "0003_enterprise_indexes"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # 1. Add column location_updated_at
-    op.add_column(
-        "donors",
-        sa.Column("location_updated_at", sa.DateTime(timezone=True), nullable=True),
+    # 1. Add column location_updated_at (idempotent)
+    op.execute(
+        "ALTER TABLE donors ADD COLUMN IF NOT EXISTS location_updated_at TIMESTAMP WITH TIME ZONE;"
     )
 
     # 2. Backfill existing donors with non-null location

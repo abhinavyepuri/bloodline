@@ -78,6 +78,10 @@ async def lifespan(app: FastAPI):
             f"'docker compose up redis -d'\n"
         )
 
+    # Initialize frozen ML models and preprocessors in background thread
+    from app.services.ml.model_loader import ml_manager
+    asyncio.get_running_loop().run_in_executor(None, ml_manager.load_models)
+
     sweep_task = asyncio.create_task(_periodic_lifecycle_sweep())
     start_event_sweepers()
     manager.start_pubsub_listener()

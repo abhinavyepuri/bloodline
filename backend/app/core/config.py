@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # CORS — comma-separated in the environment, e.g.
     #   BACKEND_CORS_ORIGINS="https://app.example.org,https://admin.example.org"
-    BACKEND_CORS_ORIGINS: List[str] = [
+    BACKEND_CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:4173",
@@ -97,6 +97,17 @@ class Settings(BaseSettings):
     # Enterprise Rate Limiting & Protection
     RATE_LIMIT_ENABLED: bool = True
     DISABLE_RATE_LIMIT: bool = False
+
+    # Machine Learning & Decision Support System
+    ML_MODEL_DIR: Optional[str] = None
+    ML_MODEL_VERSION: str = "smartblood-ml-v1"
+    ML_SPIKE_THRESHOLD: float = 0.30
+    ML_INVENTORY_RISK_THRESHOLD: float = 0.50
+    ML_WASTAGE_THRESHOLD: float = 0.75
+    ML_SAFETY_STOCK_MULTIPLIER_PLATELETS: float = 1.5
+    ML_SAFETY_STOCK_MULTIPLIER_PRBC: float = 2.0
+    ML_SAFETY_STOCK_MULTIPLIER_FFP: float = 2.5
+    ML_BENCHMARK_DATA_PATH: Optional[str] = None
 
 
     model_config = SettingsConfigDict(
