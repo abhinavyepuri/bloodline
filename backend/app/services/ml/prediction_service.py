@@ -68,6 +68,7 @@ class PredictionService:
         component_type: BloodComponentType,
         target_date: Optional[date] = None,
         simulated_demand_multiplier: float = 1.0,
+        closing_inventory: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Evaluates next-day demand, coverage, risk, and operational status for a single series.
@@ -75,13 +76,16 @@ class PredictionService:
         if target_date is None:
             target_date = date.today() + timedelta(days=1)
 
-        # 1. Fetch live unexpired available inventory
-        current_inv = await cls.get_live_closing_inventory(
-            db=db,
-            blood_bank_id=blood_bank.id,
-            blood_group=blood_group,
-            component_type=component_type,
-        )
+        # 1. Fetch live unexpired available inventory if not pre-fetched
+        if closing_inventory is not None:
+            current_inv = closing_inventory
+        else:
+            current_inv = await cls.get_live_closing_inventory(
+                db=db,
+                blood_bank_id=blood_bank.id,
+                blood_group=blood_group,
+                component_type=component_type,
+            )
 
         ml_comp = to_ml_component(component_type)
         is_ml_supported = (ml_comp is not None) and (ml_comp in ML_SUPPORTED_COMPONENTS)
@@ -173,6 +177,34 @@ class PredictionService:
         if not blood_banks:
             return []
 
+        # Single batch query for live closing inventory across all evaluated banks
+        now = datetime.now(timezone.utc)
+        inv_query = (
+            select(
+                InventoryUnit.blood_bank_id,
+                InventoryUnit.blood_group,
+                InventoryUnit.component_type,
+                func.count(InventoryUnit.id),
+            )
+            .where(
+                InventoryUnit.status == UnitStatus.AVAILABLE,
+                InventoryUnit.expiry_date > now,
+            )
+            .group_by(
+                InventoryUnit.blood_bank_id,
+                InventoryUnit.blood_group,
+                InventoryUnit.component_type,
+            )
+        )
+        if blood_bank_id:
+            inv_query = inv_query.where(InventoryUnit.blood_bank_id == blood_bank_id)
+
+        inv_res = await db.execute(inv_query)
+        inventory_map = {
+            (row[0], row[1], row[2]): int(row[3])
+            for row in inv_res.all()
+        }
+
         evaluations = []
         components = [
             BloodComponentType.PRBC,
@@ -183,6 +215,7 @@ class PredictionService:
         for bank in blood_banks:
             for comp in components:
                 for group in sorted(VALID_BLOOD_GROUPS):
+                    inv_count = inventory_map.get((bank.id, group, comp), 0)
                     eval_res = await cls.evaluate_single_series(
                         db=db,
                         blood_bank=bank,
@@ -190,6 +223,7 @@ class PredictionService:
                         component_type=comp,
                         target_date=target_date,
                         simulated_demand_multiplier=simulated_demand_multiplier,
+                        closing_inventory=inv_count,
                     )
                     evaluations.append(eval_res)
 

@@ -764,7 +764,7 @@ class AllocationService:
             "donor_id": donor_id,
             "slot": slot,
             "slots": claimed_slots,
-            "bags_claimed": len(claimed_slots),nges
+            "bags_claimed": len(claimed_slots),
             "distance_km": distance_km,
             "estimated_transit_minutes": eta_minutes,
             "units_covered": covered,
