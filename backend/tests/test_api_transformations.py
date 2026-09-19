@@ -10,7 +10,7 @@ from app.models.request import TriageLevel, RequestStatus
 from app.schemas.auth import LoginRequest, RegisterRequest
 from app.schemas.user import UserOut
 from app.schemas.request import BloodRequestCreate, BloodRequestOut
-from app.schemas.donor import DonorCreate, DonorUpdateAvailability, DonorOut, DonorHeartbeatIn
+from app.schemas.donor import DonorCreate, DonorUpdateAvailability, DonorOut, DonorHeartbeatIn, DonorTelemetryOut
 from app.schemas.inventory import InventoryUnitCreate, InventoryUnitUpdateStatus, InventoryUnitOut
 from app.schemas.allocation import DonorRespondRequest
 from app.schemas.audit import AllocationAuditLogOut
@@ -159,6 +159,24 @@ class TestStrictNormalizationAndValidation(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             DonorHeartbeatIn(latitude=12.0, longitude=77.0, extra="unwanted")
+
+    def test_donor_telemetry_out_emits_client_aliases(self):
+        """Web dashboard reads both canonical telemetry names and allocation-style aliases."""
+        out = DonorTelemetryOut(
+            donor_id="donor-1",
+            latitude=12.974,
+            longitude=77.5946,
+            distance_to_hospital_km=3.2,
+            estimated_eta_minutes=8,
+            is_approaching_ward=False,
+            message="In transit",
+        )
+        payload = out.model_dump()
+        self.assertEqual(payload["distance_to_hospital_km"], 3.2)
+        self.assertEqual(payload["distance_km"], 3.2)
+        self.assertEqual(payload["estimated_eta_minutes"], 8)
+        self.assertEqual(payload["estimated_transit_minutes"], 8)
+        self.assertFalse(payload["geofence_triggered"])
 
     def test_donor_out_includes_location_updated_at(self):
         """Verify DonorOut schema includes location_updated_at field."""

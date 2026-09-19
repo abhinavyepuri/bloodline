@@ -9,6 +9,7 @@ from app.models.user import User
 from app.models.hospital import Hospital
 from app.models.blood_bank import BloodBank
 from app.models.donor import Donor
+from app.models.donor_health_report import DonorHealthReport, HealthEligibilityStatus
 from app.models.inventory import InventoryUnit, BloodComponentType, UnitStatus
 from app.models.request import BloodRequest
 from app.models.allocation import Allocation
@@ -30,6 +31,7 @@ async def seed_data():
         await db.execute(delete(Allocation))
         await db.execute(delete(BloodRequest))
         await db.execute(delete(InventoryUnit))
+        await db.execute(delete(DonorHealthReport))
         await db.execute(delete(Donor))
         await db.execute(delete(BloodBank))
         await db.execute(delete(Hospital))
@@ -126,6 +128,70 @@ async def seed_data():
             role=UserRole.DONOR,
             is_verified=True
         )
+        user_donor_9 = User(
+            email="ian@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Ian Wright",
+            phone_number="+1-555-0309",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_10 = User(
+            email="jessica@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Jessica Taylor",
+            phone_number="+1-555-0310",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_11 = User(
+            email="kiran@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Kiran Patel",
+            phone_number="+1-555-0311",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_12 = User(
+            email="liam@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Liam O'Connor",
+            phone_number="+1-555-0312",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_13 = User(
+            email="maya@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Maya Sharma",
+            phone_number="+1-555-0313",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_14 = User(
+            email="noah@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Noah Kim",
+            phone_number="+1-555-0314",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_15 = User(
+            email="priya@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Priya Nair",
+            phone_number="+1-555-0315",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_16 = User(
+            email="samuel@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Samuel Green",
+            phone_number="+1-555-0316",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
         user_coordinator = User(
             email="coordinator@smartblood.org",
             hashed_password=hashed_pwd,
@@ -150,6 +216,9 @@ async def seed_data():
             user_donor_1, user_donor_2, user_donor_3,
             user_donor_4, user_donor_5, user_donor_6,
             user_donor_7, user_donor_8,
+            user_donor_9, user_donor_10, user_donor_11,
+            user_donor_12, user_donor_13, user_donor_14,
+            user_donor_15, user_donor_16,
             user_coordinator, user_admin
         ])
         await db.flush()
@@ -353,7 +422,174 @@ async def seed_data():
             location=ST_SetSRID(ST_Point(77.6080, 12.9760), 4326),
             location_updated_at=now,
         )
-        db.add_all([d1, d2, d3, d4, d5, d6, d7, d8])
+        d9 = Donor(
+            user_id=user_donor_9.id,
+            blood_group="A-",
+            date_of_birth=date(1995, 6, 12),
+            weight_kg=72.0,
+            last_donation_date=date(2026, 2, 20),
+            is_available=True,
+            reliability_score=0.94,
+            total_successful_donations=4,
+            latitude=12.9750,
+            longitude=77.5950,
+            location=ST_SetSRID(ST_Point(77.5950, 12.9750), 4326),
+            location_updated_at=now,
+        )
+        d10 = Donor(
+            user_id=user_donor_10.id,
+            blood_group="O-",
+            date_of_birth=date(1998, 10, 5),
+            weight_kg=60.0,
+            last_donation_date=date(2026, 3, 1),
+            is_available=True,
+            reliability_score=0.98,
+            total_successful_donations=9,
+            latitude=12.9680,
+            longitude=77.6010,
+            location=ST_SetSRID(ST_Point(77.6010, 12.9680), 4326),
+            location_updated_at=now,
+        )
+        d11 = Donor(
+            user_id=user_donor_11.id,
+            blood_group="A-",
+            date_of_birth=date(1992, 4, 18),
+            weight_kg=76.0,
+            last_donation_date=date(2026, 1, 15),
+            is_available=True,
+            reliability_score=0.91,
+            total_successful_donations=6,
+            latitude=12.9810,
+            longitude=77.5920,
+            location=ST_SetSRID(ST_Point(77.5920, 12.9810), 4326),
+            location_updated_at=now,
+        )
+        d12 = Donor(
+            user_id=user_donor_12.id,
+            blood_group="B+",
+            date_of_birth=date(1994, 9, 28),
+            weight_kg=84.0,
+            last_donation_date=date(2026, 2, 10),
+            is_available=True,
+            reliability_score=0.95,
+            total_successful_donations=7,
+            latitude=12.9640,
+            longitude=77.6150,
+            location=ST_SetSRID(ST_Point(77.6150, 12.9640), 4326),
+            location_updated_at=now,
+        )
+        d13 = Donor(
+            user_id=user_donor_13.id,
+            blood_group="AB+",
+            date_of_birth=date(1996, 12, 3),
+            weight_kg=63.0,
+            last_donation_date=date(2026, 3, 22),
+            is_available=True,
+            reliability_score=0.93,
+            total_successful_donations=3,
+            latitude=12.9880,
+            longitude=77.5840,
+            location=ST_SetSRID(ST_Point(77.5840, 12.9880), 4326),
+            location_updated_at=now,
+        )
+        d14 = Donor(
+            user_id=user_donor_14.id,
+            blood_group="O+",
+            date_of_birth=date(1991, 7, 21),
+            weight_kg=79.0,
+            last_donation_date=date(2026, 4, 2),
+            is_available=True,
+            reliability_score=0.96,
+            total_successful_donations=8,
+            latitude=12.9730,
+            longitude=77.6110,
+            location=ST_SetSRID(ST_Point(77.6110, 12.9730), 4326),
+            location_updated_at=now,
+        )
+        d15 = Donor(
+            user_id=user_donor_15.id,
+            blood_group="B-",
+            date_of_birth=date(1997, 8, 14),
+            weight_kg=58.0,
+            last_donation_date=date(2026, 1, 30),
+            is_available=True,
+            reliability_score=0.97,
+            total_successful_donations=5,
+            latitude=12.9600,
+            longitude=77.5980,
+            location=ST_SetSRID(ST_Point(77.5980, 12.9600), 4326),
+            location_updated_at=now,
+        )
+        d16 = Donor(
+            user_id=user_donor_16.id,
+            blood_group="A+",
+            date_of_birth=date(1993, 3, 9),
+            weight_kg=75.0,
+            last_donation_date=date(2026, 3, 14),
+            is_available=True,
+            reliability_score=0.92,
+            total_successful_donations=6,
+            latitude=12.9840,
+            longitude=77.6040,
+            location=ST_SetSRID(ST_Point(77.6040, 12.9840), 4326),
+            location_updated_at=now,
+        )
+        # Jessica Taylor (d10) is temporarily deferred for low hemoglobin (11.4 g/dL)
+        d10.is_available = False
+
+        db.add_all([d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15, d16])
+        await db.flush()
+
+        # Seed Health Screening Reports for all donors
+        health_reports = []
+        for i, d in enumerate([d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15, d16], start=1):
+            if d == d10:
+                hr = DonorHealthReport(
+                    donor_id=d.id,
+                    report_code="HR-2026-0099",
+                    hemoglobin_g_dl=11.4,
+                    systolic_bp=118,
+                    diastolic_bp=76,
+                    pulse_bpm=74,
+                    temperature_c=36.6,
+                    weight_kg=d.weight_kg or 60.0,
+                    blood_glucose_mg_dl=92.0,
+                    hiv_status="NEGATIVE",
+                    hepb_status="NEGATIVE",
+                    hepc_status="NEGATIVE",
+                    syphilis_status="NEGATIVE",
+                    malaria_status="NEGATIVE",
+                    eligibility_status=HealthEligibilityStatus.TEMPORARILY_DEFERRED,
+                    deferral_reason="Low hemoglobin (11.4 g/dL). Minimum 12.5 g/dL required. Prescribed dietary iron.",
+                    deferral_end_date=date.today() + timedelta(days=30),
+                    doctor_name="Dr. Sarah Lin, MD",
+                    facility_name="Central Transfusion Clinical Lab",
+                    doctor_remarks="Temporary clinical deferral. Patient has mild nutritional iron deficiency. Advised iron supplements and hydration. Recommended re-test in 30 days.",
+                )
+            else:
+                hr = DonorHealthReport(
+                    donor_id=d.id,
+                    report_code=f"HR-2026-{i:04d}",
+                    hemoglobin_g_dl=14.2,
+                    systolic_bp=120,
+                    diastolic_bp=80,
+                    pulse_bpm=72,
+                    temperature_c=36.6,
+                    weight_kg=d.weight_kg or 65.0,
+                    blood_glucose_mg_dl=95.0,
+                    hiv_status="NEGATIVE",
+                    hepb_status="NEGATIVE",
+                    hepc_status="NEGATIVE",
+                    syphilis_status="NEGATIVE",
+                    malaria_status="NEGATIVE",
+                    eligibility_status=HealthEligibilityStatus.ELIGIBLE,
+                    doctor_name="Dr. Sarah Lin, MD",
+                    facility_name="Central Transfusion Clinical Lab",
+                    doctor_remarks="Clinical clearance verified. All vitals and serology within optimal bounds. Certified fit for blood donation.",
+                )
+            health_reports.append(hr)
+
+        db.add_all(health_reports)
         await db.commit()
 
         print("Synthetic database seeded successfully!")
@@ -362,15 +598,22 @@ async def seed_data():
         print("  Hospital Admin:    hospital@smartblood.org    / password123")
         print("  Hospital Admin 2:  stjude@smartblood.org      / password123")
         print("  Blood Bank Staff:  bloodbank@smartblood.org   / password123")
-        print("  Donor 1 – Alice   (O-):  alice@donor.org            / password123")
-        print("  Donor 2 – Bob     (O-):  bob@donor.org              / password123")
-        print("  Donor 3 – Charlie (A+):  charlie@donor.org          / password123")
-        print("  Donor 4 – Diana   (B-):  diana@donor.org            / password123")
-        print("  Donor 5 – Evan    (B+):  evan@donor.org             / password123")
-        print("  Donor 6 – Fatima  (AB-): fatima@donor.org           / password123")
-        print("  Donor 7 – George  (AB+): george@donor.org           / password123")
-        print("  Donor 8 – Helen   (O+):  helen@donor.org            / password123")
-        print("  Coordinator:       coordinator@smartblood.org / password123")
+        print("  Donor 1  – Alice   (O-):  alice@donor.org            / password123")
+        print("  Donor 2  – Bob     (O-):  bob@donor.org              / password123")
+        print("  Donor 3  – Charlie (A+):  charlie@donor.org          / password123")
+        print("  Donor 4  – Diana   (B-):  diana@donor.org            / password123")
+        print("  Donor 5  – Evan    (B+):  evan@donor.org             / password123")
+        print("  Donor 6  – Fatima  (AB-): fatima@donor.org           / password123")
+        print("  Donor 7  – George  (AB+): george@donor.org           / password123")
+        print("  Donor 8  – Helen   (O+):  helen@donor.org            / password123")
+        print("  Donor 9  – Ian     (A-):  ian@donor.org              / password123")
+        print("  Donor 10 – Jessica (O-):  jessica@donor.org          / password123")
+        print("  Donor 11 – Kiran   (A-):  kiran@donor.org            / password123")
+        print("  Donor 12 – Liam    (B+):  liam@donor.org             / password123")
+        print("  Donor 13 – Maya    (AB+): maya@donor.org             / password123")
+        print("  Donor 14 – Noah    (O+):  noah@donor.org             / password123")
+        print("  Donor 15 – Priya   (B-):  priya@donor.org            / password123")
+        print("  Donor 16 – Samuel  (A+):  samuel@donor.org           / password123")
 
 
 if __name__ == "__main__":

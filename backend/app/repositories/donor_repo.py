@@ -1,13 +1,18 @@
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 from sqlalchemy import select, func, and_, or_
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from geoalchemy2 import Geography
 from geoalchemy2.functions import ST_DWithin, ST_Distance
 from app.models.donor import Donor
 from app.models.inventory import BloodComponentType
 from app.repositories.base import BaseRepository
-from app.services.donor_service import MIN_DONOR_WEIGHT_KG, donation_interval_days
+from app.services.donor_service import (
+    MIN_DONOR_WEIGHT_KG,
+    donation_interval_days,
+    is_donor_eligible,
+)
 
 
 class DonorRepository(BaseRepository[Donor]):
@@ -82,9 +87,15 @@ class DonorRepository(BaseRepository[Donor]):
 
         query = (
             select(Donor, distance_km)
+            .options(selectinload(Donor.health_reports))
             .where(and_(*conditions))
             .order_by(distance_km.asc(), Donor.reliability_score.desc())
         )
 
         result = await self.db.execute(query)
-        return [(row[0], float(row[1])) for row in result.all()]
+        return [
+            (row[0], float(row[1]))
+            for row in result.all()
+            if is_donor_eligible(row[0], component_type)
+        ]
+

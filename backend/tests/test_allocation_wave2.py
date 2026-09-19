@@ -52,7 +52,7 @@ async def _add_third_o_neg_donor(db, longitude: float = 77.6000, latitude: float
         email=DAVE_EMAIL,
         hashed_password=get_password_hash("password123"),
         full_name="Dave Donor (D4)",
-        phone_number="+1-555-0304",
+        phone_number="+1-555-0399",
         role=UserRole.DONOR,
         is_verified=True,
     )

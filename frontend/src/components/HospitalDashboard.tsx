@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { api } from '../lib/api';
 import { BloodRequest, BloodComponentType, TriageLevel, AllocationAuditLog } from '../types';
-import { AlertCircle, Clock, CheckCircle2, RefreshCw, Send, Info, Truck, ShieldAlert, X } from 'lucide-react';
+import { AlertCircle, Clock, CheckCircle2, RefreshCw, Send, Info, Truck, ShieldAlert, X, Droplet, Package } from 'lucide-react';
 
 const COMPONENT_LABELS: Record<BloodComponentType, string> = {
   PRBC: 'Red Blood Cells',
@@ -56,15 +56,19 @@ export const HospitalDashboard: React.FC = () => {
 
   useEffect(() => {
     fetchRequests();
+    const interval = setInterval(() => {
+      fetchRequests();
+    }, 3000);
+    return () => clearInterval(interval);
   }, [fetchRequests, user]);
 
   // Refresh on relevant WebSocket events & handle 500m trauma bay approach alert
   useEffect(() => {
     if (!lastEvent) return;
 
-    if (lastEvent.type === 'DONOR_APPROACHING_WARD' || lastEvent.type === 'COURIER_APPROACHING_WARD') {
+    if (lastEvent.type === 'DONOR_APPROACHING_WARD' || lastEvent.type === 'COURIER_APPROACHING_WARD' || lastEvent.type === 'BLOOD_BANK_DISPATCHED') {
       setWardAlert({
-        message: lastEvent.message || 'Inbound blood donor / courier has entered the 500m emergency ward geofence. Pre-warm blood thawers and prepare patient transfusion line!',
+        message: lastEvent.message || 'Inbound blood bags / courier has entered transit or is approaching ward. Pre-warm blood thawers and prepare patient transfusion line!',
         timestamp: new Date().toLocaleTimeString(),
       });
     }
@@ -72,8 +76,10 @@ export const HospitalDashboard: React.FC = () => {
     if (
       [
         'REQUEST_CREATED',
+        'REQUEST_UPDATED',
         'INVENTORY_LOCKED',
         'DONOR_CLAIM_SUCCESS',
+        'BLOOD_BANK_ACCEPTED',
         'BLOOD_BANK_DISPATCHED',
         'DONOR_APPROACHING_WARD',
         'RE_PLANNING_TRIGGERED',
@@ -114,12 +120,11 @@ export const HospitalDashboard: React.FC = () => {
     }
   };
 
-  const handleFulfill = async (id: string) => {
+  const handleFulfill = async (id: string, allowPartial: boolean = false) => {
     try {
-      await api.post(`/requests/${id}/fulfill`);
+      await api.post(`/requests/${id}/fulfill${allowPartial ? '?allow_partial=true' : ''}`);
       await fetchRequests();
     } catch (err) {
-      // The server refuses to confirm receipt while bags are still outstanding.
       setError(err instanceof Error ? err.message : 'Could not confirm receipt.');
     }
   };
@@ -372,6 +377,30 @@ export const HospitalDashboard: React.FC = () => {
               const shortfall = req.units_shortfall ?? Math.max(req.units_requested - covered, 0);
               const fullyCovered = shortfall === 0;
               const isClosed = req.status === 'FULFILLED' || req.status === 'CANCELLED';
+              const inTransitCount = (req.allocations || []).filter(a => a.status === 'IN_TRANSIT').length;
+              const lockedCount = (req.allocations || []).filter(a => a.status === 'HARD_LOCKED').length;
+
+              let statusBadgeClass = 'badge-cyan';
+              let statusBadgeText: string = req.status;
+              if (req.status === 'FULFILLED') {
+                statusBadgeClass = 'badge-purple';
+                statusBadgeText = 'Delivered & Transfused';
+              } else if (req.status === 'COMMITTED_IN_TRANSIT') {
+                statusBadgeClass = 'badge-green';
+                statusBadgeText = 'All Units En Route';
+              } else if (inTransitCount > 0) {
+                statusBadgeClass = 'badge-green';
+                statusBadgeText = `🚑 ${inTransitCount}/${req.units_requested} Bags In-Transit`;
+              } else if (lockedCount > 0) {
+                statusBadgeClass = 'badge-cyan';
+                statusBadgeText = `📦 ${lockedCount}/${req.units_requested} Bags Reserved in Storage`;
+              } else if (req.status === 'RE_PLANNING') {
+                statusBadgeClass = 'badge-red';
+                statusBadgeText = 'Finding Replacement';
+              } else if (req.status === 'PROXIMITY_ZONE_NOTIFIED') {
+                statusBadgeClass = 'badge-amber';
+                statusBadgeText = 'Asking Donors';
+              }
 
               return (
                 <div
@@ -380,13 +409,13 @@ export const HospitalDashboard: React.FC = () => {
                   className={`glass-panel ${req.status === 'RE_PLANNING' ? 'highlight-red' : ''}`}
                   style={{
                     borderLeft: `4px solid ${
-                      req.status === 'COMMITTED_IN_TRANSIT'
+                      req.status === 'COMMITTED_IN_TRANSIT' || inTransitCount > 0
                         ? 'var(--emerald-500)'
                         : req.status === 'RE_PLANNING'
                         ? 'var(--crimson-500)'
-                        : req.status === 'PROXIMITY_ZONE_NOTIFIED'
-                        ? 'var(--amber-500)'
-                        : 'var(--cyan-500)'
+                        : lockedCount > 0
+                        ? 'var(--cyan-500)'
+                        : 'var(--amber-500)'
                     }`,
                   }}
                 >
@@ -396,26 +425,8 @@ export const HospitalDashboard: React.FC = () => {
                         <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
                           {req.units_requested}x {req.required_blood_group} ({COMPONENT_LABELS[req.component_type] ?? req.component_type})
                         </span>
-                        <span className={`badge ${
-                          req.status === 'COMMITTED_IN_TRANSIT'
-                            ? 'badge-green'
-                            : req.status === 'RE_PLANNING'
-                            ? 'badge-red'
-                            : req.status === 'PROXIMITY_ZONE_NOTIFIED'
-                            ? 'badge-amber'
-                            : req.status === 'FULFILLED'
-                            ? 'badge-purple'
-                            : 'badge-cyan'
-                        }`}>
-                          {req.status === 'COMMITTED_IN_TRANSIT'
-                            ? 'On The Way'
-                            : req.status === 'RE_PLANNING'
-                            ? 'Finding Replacement'
-                            : req.status === 'PROXIMITY_ZONE_NOTIFIED'
-                            ? 'Asking Donors'
-                            : req.status === 'FULFILLED'
-                            ? 'Delivered'
-                            : req.status}
+                        <span className={`badge ${statusBadgeClass}`}>
+                          {statusBadgeText}
                         </span>
                       </div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
@@ -461,28 +472,59 @@ export const HospitalDashboard: React.FC = () => {
                         Where This Blood Is Coming From:
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
-                        {req.allocations.map((alloc) => (
-                          <div
-                            key={alloc.id}
-                            style={{
-                              background: 'var(--color-bg)',
-                              padding: '0.5rem 0.8rem',
-                              borderRadius: '8px',
-                              border: '1px solid var(--border-subtle)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '0.5rem',
-                              fontSize: '0.8rem',
-                            }}
-                          >
-                            <Truck size={14} color="var(--emerald-400)" />
-                            <span>
-                              <b>{alloc.source_type === 'BLOOD_BANK_INVENTORY' ? '📦 From Blood Bank Storage' : '🙋 From Volunteer Donor'}</b>
-                              {alloc.distance_km != null && ` (~${alloc.distance_km}km away, ETA ~${alloc.estimated_transit_minutes} min)`}
-                            </span>
-                            <span className="badge badge-green" style={{ fontSize: '0.65rem' }}>Confirmed</span>
-                          </div>
-                        ))}
+                        {req.allocations.map((alloc) => {
+                          const isInventory = alloc.source_type === 'BLOOD_BANK_INVENTORY';
+                          const batchDisplay = alloc.batch_number || (alloc.inventory_unit_id ? `Bag-${alloc.inventory_unit_id.slice(0, 6)}` : null);
+                          const bloodGroupDisplay = alloc.blood_group || req.required_blood_group;
+
+                          let badgeText = 'Confirmed';
+                          let badgeClass = 'badge-green';
+                          if (alloc.status === 'IN_TRANSIT') {
+                            badgeText = `In Transit (~${alloc.estimated_transit_minutes ?? 5} min)`;
+                            badgeClass = 'badge-green';
+                          } else if (alloc.status === 'HARD_LOCKED') {
+                            badgeText = isInventory ? 'Packed in Cold Storage' : 'Donor Confirmed';
+                            badgeClass = 'badge-cyan';
+                          } else if (alloc.status === 'COMPLETED') {
+                            badgeText = 'Received & Transfused';
+                            badgeClass = 'badge-purple';
+                          }
+
+                          return (
+                            <div
+                              key={alloc.id}
+                              style={{
+                                background: 'var(--color-bg)',
+                                padding: '0.55rem 0.85rem',
+                                borderRadius: '8px',
+                                border: alloc.status === 'IN_TRANSIT' ? '1px solid var(--emerald-500)' : '1px solid var(--border-subtle)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                fontSize: '0.8rem',
+                              }}
+                            >
+                              {isInventory ? (
+                                alloc.status === 'IN_TRANSIT' ? <Truck size={14} color="var(--emerald-400)" /> : <Package size={14} color="var(--cyan-400)" />
+                              ) : (
+                                <Droplet size={14} color="var(--crimson-400)" />
+                              )}
+                              <span>
+                                <b>
+                                  {isInventory ? (
+                                    `📦 Blood Bank ${batchDisplay ? `(${batchDisplay})` : 'Storage'} [${bloodGroupDisplay}]`
+                                  ) : (
+                                    `🙋 Volunteer Donor [${bloodGroupDisplay}]`
+                                  )}
+                                </b>
+                                {alloc.distance_km != null && ` (~${alloc.distance_km}km away)`}
+                              </span>
+                              <span className={`badge ${badgeClass}`} style={{ fontSize: '0.65rem' }}>
+                                {badgeText}
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -508,15 +550,15 @@ export const HospitalDashboard: React.FC = () => {
                         Cancel Request
                       </button>
                     )}
-                    {req.status === 'COMMITTED_IN_TRANSIT' && fullyCovered && (
+                    {!isClosed && (inTransitCount > 0 || covered > 0) && (
                       <button
                         id={`btn-fulfill-${req.id}`}
-                        onClick={() => handleFulfill(req.id)}
+                        onClick={() => handleFulfill(req.id, !fullyCovered)}
                         className="btn btn-cyan"
                         style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
                       >
                         <CheckCircle2 size={14} />
-                        Confirm Blood Received
+                        {fullyCovered ? 'Confirm Blood Received' : `Confirm Receipt & Transfuse (${covered} Available)`}
                       </button>
                     )}
                   </div>

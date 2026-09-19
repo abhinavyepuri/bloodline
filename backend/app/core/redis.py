@@ -63,6 +63,44 @@ end
 return -1
 """
 
+# Atomic multi-slot claiming Lua script: claims up to `count` free unit slots for a donor
+LUA_CLAIM_SLOTS = """
+local req_id = KEYS[1]
+local max_units = tonumber(ARGV[1])
+local donor_id = ARGV[2]
+local ttl = tonumber(ARGV[3])
+local target_count = tonumber(ARGV[4])
+
+-- 1. Find all slots already held by this donor
+local held_slots = {}
+for i = 0, max_units - 1 do
+    local key = "lock:hard:req:" .. req_id .. ":unit:" .. i
+    if redis.call("GET", key) == donor_id then
+        table.insert(held_slots, i)
+    end
+end
+
+-- If donor already holds >= target_count slots, return existing held slots
+if #held_slots >= target_count then
+    return held_slots
+end
+
+-- 2. Claim additional free slots until donor holds target_count slots
+local needed = target_count - #held_slots
+for i = 0, max_units - 1 do
+    if needed <= 0 then
+        break
+    end
+    local key = "lock:hard:req:" .. req_id .. ":unit:" .. i
+    if redis.call("SET", key, donor_id, "NX", "EX", ttl) then
+        table.insert(held_slots, i)
+        needed = needed - 1
+    end
+end
+
+return held_slots
+"""
+
 
 class ConcurrencyLockManager:
     """
@@ -108,10 +146,11 @@ class ConcurrencyLockManager:
         key = self._zone_key(request_id)
         pipe = self.redis.pipeline()
         pipe.sadd(key, *donor_ids)
-        # No expire on the zone itself — donors can accept any time they see the request
-        pipe.persist(key)
-        # Timeout key still used by event sweeper; use the provided TTL (default 24h)
-        pipe.set(self._timeout_key(request_id), "active", ex=ttl_seconds)
+        if ttl_seconds:
+            pipe.expire(key, ttl_seconds)
+            pipe.set(self._timeout_key(request_id), "active", ex=ttl_seconds)
+        else:
+            pipe.persist(key)
         await pipe.execute()
 
     async def get_alerted_donors(self, request_id: str) -> Set[str]:
@@ -158,6 +197,45 @@ class ConcurrencyLockManager:
         return ttl if isinstance(ttl, int) and ttl >= 0 else None
 
     # ------------------------------------------------------------ hard lock
+    async def claim_unit_slots(
+        self,
+        request_id: str,
+        donor_id: str,
+        max_units: int,
+        count: int = 1,
+        ttl_seconds: int = 86400,
+    ) -> List[int]:
+        """
+        Atomically claim up to `count` free unit slots for this donor in a single round-trip Lua script.
+
+        Returns list of claimed slot indices.
+        Concurrent callers cannot claim the same slot: Redis Lua executes atomically.
+        """
+        if max_units <= 0 or count <= 0:
+            return []
+
+        try:
+            res = await self.redis.eval(
+                LUA_CLAIM_SLOTS, 1, request_id, max_units, donor_id, ttl_seconds, count
+            )
+            if res is not None and isinstance(res, (list, tuple)):
+                return [int(x) for x in res]
+            return []
+        except Exception:
+            # Fallback for environments where EVAL might be disabled
+            held = await self.donor_slots(request_id, donor_id, max_units)
+            if len(held) >= count:
+                return held
+            needed = count - len(held)
+            for index in range(max(max_units, 1)):
+                if needed <= 0:
+                    break
+                key = self._slot_key(request_id, index)
+                if await self.redis.set(key, donor_id, nx=True, ex=ttl_seconds):
+                    held.append(index)
+                    needed -= 1
+            return held
+
     async def claim_unit_slot(
         self,
         request_id: str,
@@ -182,18 +260,23 @@ class ConcurrencyLockManager:
             return slot if slot >= 0 else None
         except Exception:
             # Fallback for environments where EVAL might be disabled
-            for index in range(max(max_units, 1)):
-                key = self._slot_key(request_id, index)
-                if await self.redis.set(key, donor_id, nx=True, ex=ttl_seconds):
-                    return index
-            return None
+            slots = await self.claim_unit_slots(
+                request_id, donor_id, max_units, count=1, ttl_seconds=ttl_seconds
+            )
+            return slots[0] if slots else None
+
+    async def donor_slots(self, request_id: str, donor_id: str, max_units: int) -> List[int]:
+        """All slot indices this donor currently holds on this request."""
+        if max_units <= 0:
+            return []
+        keys = [self._slot_key(request_id, i) for i in range(max_units)]
+        values = await self.redis.mget(keys)
+        return [i for i, v in enumerate(values) if v == donor_id]
 
     async def donor_slot(self, request_id: str, donor_id: str, max_units: int) -> Optional[int]:
-        """The slot index this donor already holds on this request, if any."""
-        for index in range(max(max_units, 1)):
-            if await self.redis.get(self._slot_key(request_id, index)) == donor_id:
-                return index
-        return None
+        """The first slot index this donor already holds on this request, if any."""
+        slots = await self.donor_slots(request_id, donor_id, max_units)
+        return slots[0] if slots else None
 
     async def claimed_slots(self, request_id: str, max_units: int) -> Dict[int, str]:
         """Map of slot index -> donor id for every claimed slot."""
@@ -208,10 +291,11 @@ class ConcurrencyLockManager:
         return len(await self.claimed_slots(request_id, max_units))
 
     async def release_donor_slot(self, request_id: str, donor_id: str, max_units: int) -> bool:
-        """Release a specific donor's hard-locked unit slot if held."""
-        slot = await self.donor_slot(request_id, donor_id, max_units)
-        if slot is not None:
-            await self.redis.delete(self._slot_key(request_id, slot))
+        """Release all unit slots held by a specific donor on this request."""
+        slots = await self.donor_slots(request_id, donor_id, max_units)
+        if slots:
+            keys = [self._slot_key(request_id, s) for s in slots]
+            await self.redis.delete(*keys)
             return True
         return False
 

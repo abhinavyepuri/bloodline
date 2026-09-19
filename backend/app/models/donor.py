@@ -23,3 +23,10 @@ class Donor(TimestampedModel):
     location_updated_at = Column(DateTime(timezone=True), nullable=True)
 
     user = relationship("User", backref="donor_profile")
+    health_reports = relationship(
+        "DonorHealthReport",
+        backref="donor",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        order_by="desc(DonorHealthReport.created_at)"
+    )

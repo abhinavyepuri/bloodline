@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Optional, Any
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 
 class DonorCreate(BaseModel):
@@ -34,6 +34,9 @@ class DonorUpdateAvailability(BaseModel):
     )
 
 
+from app.schemas.health_report import HealthReportOut
+
+
 class DonorOut(BaseModel):
     id: str
     user_id: str
@@ -47,6 +50,7 @@ class DonorOut(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     location_updated_at: Optional[datetime] = None
+    latest_health_report: Optional[HealthReportOut] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -106,5 +110,23 @@ class DonorTelemetryOut(BaseModel):
     message: str
 
     model_config = ConfigDict(from_attributes=True)
+
+    # Web client historically read allocation-style names (distance_km / ETA /
+    # geofence_triggered). Emit both so the dashboard never shows 0 km / 1 min
+    # just because it looked at the wrong key.
+    @computed_field
+    @property
+    def distance_km(self) -> Optional[float]:
+        return self.distance_to_hospital_km
+
+    @computed_field
+    @property
+    def estimated_transit_minutes(self) -> Optional[int]:
+        return self.estimated_eta_minutes
+
+    @computed_field
+    @property
+    def geofence_triggered(self) -> bool:
+        return self.is_approaching_ward
 
 

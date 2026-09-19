@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Optional
 from sqlalchemy import Column, String, Float, DateTime, Enum as SQLEnum, ForeignKey
 from sqlalchemy.orm import relationship
 from app.models.base import TimestampedModel
@@ -67,3 +68,18 @@ class Allocation(TimestampedModel):
     request = relationship("BloodRequest", back_populates="allocations")
     inventory_unit = relationship("InventoryUnit")
     donor = relationship("Donor")
+
+    @property
+    def batch_number(self) -> Optional[str]:
+        unit = self.__dict__.get("inventory_unit")
+        return unit.batch_number if unit is not None else None
+
+    @property
+    def blood_group(self) -> Optional[str]:
+        unit = self.__dict__.get("inventory_unit")
+        if unit is not None:
+            return unit.blood_group
+        donor = self.__dict__.get("donor")
+        if donor is not None:
+            return donor.blood_group
+        return None

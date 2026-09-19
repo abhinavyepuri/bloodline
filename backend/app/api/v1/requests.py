@@ -11,7 +11,7 @@ from app.api.deps import get_current_user, resolve_role
 from app.core.database import get_db
 from app.core.permissions import UserRole
 from app.core.redis import ConcurrencyLockManager, get_redis
-from app.models.allocation import AllocationStatus
+from app.models.allocation import Allocation, AllocationStatus
 from app.models.donor import Donor
 from app.models.hospital import Hospital
 from app.models.inventory import InventoryUnit, UnitStatus
@@ -44,7 +44,8 @@ RESERVING_ALLOCATION_STATUSES = (
 )
 
 _RELOAD_OPTIONS = (
-    selectinload(BloodRequest.allocations),
+    selectinload(BloodRequest.allocations).selectinload(Allocation.inventory_unit),
+    selectinload(BloodRequest.allocations).selectinload(Allocation.donor),
     selectinload(BloodRequest.hospital),
 )
 
@@ -362,6 +363,7 @@ async def cancel_blood_request(
 @router.post("/{id}/fulfill", response_model=BloodRequestOut)
 async def fulfill_blood_request(
     id: str,
+    allow_partial: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -379,12 +381,19 @@ async def fulfill_blood_request(
             detail="A cancelled request cannot be fulfilled.",
         )
 
-    if blood_req.units_covered < blood_req.units_requested:
+    if blood_req.units_covered <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No blood units have been secured or dispatched yet to fulfill this request.",
+        )
+
+    if blood_req.units_covered < blood_req.units_requested and not allow_partial:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"Only {blood_req.units_covered} of {blood_req.units_requested} unit(s) are "
-                f"secured. Source the remaining {blood_req.units_shortfall} before fulfilling."
+                f"secured. Source the remaining {blood_req.units_shortfall} before fulfilling, "
+                f"or confirm partial delivery with allow_partial=true."
             ),
         )
 

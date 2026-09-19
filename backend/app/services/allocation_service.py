@@ -407,6 +407,27 @@ class AllocationService:
         )
         await self.db.commit()
 
+        if covered > 0:
+            manager.dispatch(
+                manager.broadcast_operational(
+                    {
+                        "type": "INVENTORY_LOCKED",
+                        "request_id": request.id,
+                        "hospital_id": hospital.id if hospital else None,
+                        "units_count": covered,
+                        "units_requested": units_requested,
+                        "batches": batches,
+                        "status": request.status.value,
+                        "eta_minutes": estimate_eta_minutes(
+                            candidate_scores[batches[0]]["distance_km"], INVENTORY_PREPARATION_MINUTES
+                        )
+                        if batches
+                        else None,
+                        "message": f"{covered} of {units_requested} unit(s) reserved from blood bank storage.",
+                    }
+                )
+            )
+
         manager.dispatch(
             manager.broadcast_to_donors(
                 donor_ids,
@@ -510,6 +531,43 @@ class AllocationService:
             raise DomainException(f"Blood request '{request_id}' not found", 404)
         canonical_id = request.id
 
+        donor = await self.db.get(Donor, donor_id)
+        if not donor:
+            raise DomainException("Donor profile not found", 404)
+
+        # Early idempotency check: if donor already holds active allocations or slots on this request
+        if action.upper() != "DECLINE":
+            existing_allocs_res = await self.db.execute(
+                select(Allocation).where(
+                    and_(
+                        Allocation.request_id == canonical_id,
+                        Allocation.donor_id == donor_id,
+                        Allocation.status.in_(COVERING_ALLOCATION_STATUSES),
+                    )
+                )
+            )
+            donor_allocs = existing_allocs_res.scalars().all()
+            existing_slots = await lock_mgr.donor_slots(canonical_id, donor_id, request.units_requested)
+            existing_count = max(len(donor_allocs), len(existing_slots))
+
+            if existing_count >= max(1, bags_offered):
+                hospital = await self.db.get(Hospital, request.hospital_id)
+                distance_km = self._donor_distance_km(donor, hospital)
+                eta_minutes = estimate_eta_minutes(distance_km, DONOR_PREPARATION_MINUTES)
+                covered_now = await self.covered_unit_count(canonical_id)
+                return {
+                    "status": "ALREADY_CLAIMED",
+                    "donor_id": donor_id,
+                    "slot": existing_slots[0] if existing_slots else 0,
+                    "distance_km": distance_km,
+                    "estimated_transit_minutes": eta_minutes,
+                    "bags_committed": existing_count,
+                    "units_covered": covered_now,
+                    "units_requested": request.units_requested,
+                    "shortfall": max(0, request.units_requested - covered_now),
+                    "request_status": request.status.value,
+                }
+
         if request.status not in (
             RequestStatus.PENDING_EVALUATION,
             RequestStatus.PROXIMITY_ZONE_NOTIFIED,
@@ -520,10 +578,6 @@ class AllocationService:
                 f"(status: {request.status.value}).",
                 409,
             )
-
-        donor = await self.db.get(Donor, donor_id)
-        if not donor:
-            raise DomainException("Donor profile not found", 404)
 
         # A donor may only respond to a request they were actually alerted for. The
         # alert zone is the sole authority on that: the eligibility and compatibility
@@ -578,18 +632,39 @@ class AllocationService:
                 donor.blood_group, request.required_blood_group
             )
 
-        # Idempotent: a donor who already holds a slot is not given a second one.
-        existing_slot = await lock_mgr.donor_slot(canonical_id, donor_id, request.units_requested)
-        if existing_slot is not None:
+        # Idempotent: check existing slots held by this donor on this request
+        existing_slots = await lock_mgr.donor_slots(canonical_id, donor_id, request.units_requested)
+        covered_before = await self.covered_unit_count(canonical_id)
+        shortfall = max(0, request.units_requested - covered_before)
+
+        if shortfall <= 0 and not existing_slots:
+            # Every unit slot is already taken
+            raise AllocationRaceConditionError(canonical_id)
+
+        target_count = min(max(1, bags_offered), shortfall + len(existing_slots))
+
+        if existing_slots and len(existing_slots) >= target_count:
+            hospital = await self.db.get(Hospital, request.hospital_id)
+            distance_km = self._donor_distance_km(donor, hospital)
+            eta_minutes = estimate_eta_minutes(distance_km, DONOR_PREPARATION_MINUTES)
             return {
                 "status": "ALREADY_CLAIMED",
                 "donor_id": donor_id,
-                "slot": existing_slot,
+                "slot": existing_slots[0],
+                "distance_km": distance_km,
+                "estimated_transit_minutes": eta_minutes,
+                "bags_committed": len(existing_slots),
+                "units_covered": covered_before,
+                "units_requested": request.units_requested,
+                "shortfall": shortfall,
+                "request_status": request.status.value,
             }
 
-        slot = await lock_mgr.claim_unit_slot(canonical_id, donor_id, request.units_requested)
-        if slot is None:
-            # Every unit slot is taken by other donors.
+        slots = await lock_mgr.claim_unit_slots(
+            canonical_id, donor_id, request.units_requested, count=target_count
+        )
+        new_slots = [s for s in slots if s not in existing_slots]
+        if not new_slots:
             raise AllocationRaceConditionError(canonical_id)
 
         try:
@@ -597,16 +672,19 @@ class AllocationService:
             distance_km = self._donor_distance_km(donor, hospital)
             eta_minutes = estimate_eta_minutes(distance_km, DONOR_PREPARATION_MINUTES)
 
-            allocation = Allocation(
-                request_id=canonical_id,
-                source_type=AllocationSourceType.LIVE_DONOR,
-                donor_id=donor_id,
-                status=AllocationStatus.HARD_LOCKED,
-                distance_km=distance_km,
-                estimated_transit_minutes=eta_minutes,
-                allocated_at=datetime.now(timezone.utc),
-            )
-            self.db.add(allocation)
+            created_allocations: List[Allocation] = []
+            for s in new_slots:
+                alloc = Allocation(
+                    request_id=canonical_id,
+                    source_type=AllocationSourceType.LIVE_DONOR,
+                    donor_id=donor_id,
+                    status=AllocationStatus.HARD_LOCKED,
+                    distance_km=distance_km,
+                    estimated_transit_minutes=eta_minutes,
+                    allocated_at=datetime.now(timezone.utc),
+                )
+                self.db.add(alloc)
+                created_allocations.append(alloc)
             await self.db.flush()
 
             covered = await self.covered_unit_count(canonical_id)
@@ -626,7 +704,8 @@ class AllocationService:
                     urgency_score=request.calculated_urgency_score,
                     candidate_scores_json={
                         "claimed_by_donor": donor_id,
-                        "slot_index": slot,
+                        "slot_indices": slots,
+                        "bags_committed": len(slots),
                         "distance_km": distance_km,
                         "eta_minutes": eta_minutes,
                         "units_covered": covered,
@@ -634,7 +713,7 @@ class AllocationService:
                     },
                     selected_resource_id=donor_id,
                     rationale_summary=(
-                        f"Donor {donor_id[:8]}... claimed unit slot {slot + 1} of "
+                        f"Donor {donor_id[:8]}... claimed {len(new_slots)} unit slot(s) {slots} of "
                         f"{request.units_requested} ({distance_km}km, ETA ~{eta_minutes}min). "
                         f"{covered}/{request.units_requested} unit(s) now covered."
                     ),
@@ -642,8 +721,9 @@ class AllocationService:
             )
             await self.db.commit()
         except Exception:
-            # Clean up claimed slot from Redis to prevent lock leaking on unexpected DB errors
-            await lock_mgr.release_donor_slot(canonical_id, donor_id, request.units_requested)
+            # Clean up only the newly claimed slots to prevent lock leaking on unexpected DB errors
+            for s in new_slots:
+                await redis_conn.delete(lock_mgr._slot_key(canonical_id, s))
             raise
 
         manager.dispatch(
@@ -656,11 +736,12 @@ class AllocationService:
                     "donor_id": donor_id,
                     "distance_km": distance_km,
                     "eta_minutes": eta_minutes,
+                    "bags_committed": len(slots),
                     "units_covered": covered,
                     "units_requested": request.units_requested,
                     "status": request.status.value,
                     "message": (
-                        "Your offer to donate is confirmed. Please head toward the hospital."
+                        f"Your offer to donate {len(slots)} bag(s) is confirmed. Please head toward the hospital."
                     ),
                 },
             )
@@ -674,10 +755,11 @@ class AllocationService:
                     "donor_id": donor_id,
                     "distance_km": distance_km,
                     "eta_minutes": eta_minutes,
+                    "bags_committed": len(slots),
                     "units_covered": covered,
                     "units_requested": request.units_requested,
                     "status": request.status.value,
-                    "message": "Nearby volunteer donor agreed to donate.",
+                    "message": f"Nearby volunteer donor agreed to donate {len(slots)} unit(s).",
                 }
             )
         )
@@ -734,20 +816,18 @@ class AllocationService:
                 )
             )
 
-
         return {
             "status": "HARD_LOCKED_COMMITTED",
-            "allocation_id": allocation.id,
+            "allocation_id": created_allocations[0].id if created_allocations else None,
+            "allocation_ids": [a.id for a in created_allocations],
             "donor_id": donor_id,
-            "slot": slot,
+            "slot": slots[0] if slots else None,
             "distance_km": distance_km,
             "estimated_transit_minutes": eta_minutes,
+            "bags_committed": len(slots),
             "units_covered": covered,
             "units_requested": request.units_requested,
             "shortfall": max(remaining, 0),
-            # The request's own status, as distinct from ``status`` above which describes
-            # the outcome of this response. The donor dashboard needs to know whether the
-            # request as a whole is now committed.
             "request_status": request.status.value,
         }
 
