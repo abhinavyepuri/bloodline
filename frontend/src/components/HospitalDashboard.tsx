@@ -28,6 +28,7 @@ export const HospitalDashboard: React.FC = () => {
   const [units, setUnits] = useState(2);
   const [triageLevel, setTriageLevel] = useState<TriageLevel>('MASSIVE_TRANSFUSION_PROTOCOL');
   const [deadlineMinutes, setDeadlineMinutes] = useState(15);
+  const [fulfillmentMode, setFulfillmentMode] = useState<'AUTO' | 'DIRECT_DONOR'>('AUTO');
   const [submitting, setSubmitting] = useState(false);
 
   // Pagination
@@ -60,6 +61,8 @@ export const HospitalDashboard: React.FC = () => {
 
   useEffect(() => {
     fetchRequests();
+    const interval = setInterval(fetchRequests, 4000);
+    return () => clearInterval(interval);
   }, [fetchRequests, user]);
 
   // Refresh on relevant WebSocket events & handle 500m trauma bay approach alert
@@ -76,6 +79,7 @@ export const HospitalDashboard: React.FC = () => {
     if (
       [
         'REQUEST_CREATED',
+        'REQUEST_UPDATED',
         'INVENTORY_LOCKED',
         'DONOR_CLAIM_SUCCESS',
         'BLOOD_BANK_DISPATCHED',
@@ -104,6 +108,7 @@ export const HospitalDashboard: React.FC = () => {
       units_requested: Number(units),
       triage_level: triageLevel,
       deadline_at: deadlineAt,
+      fulfillment_mode: fulfillmentMode,
     };
 
     try {
@@ -251,6 +256,21 @@ export const HospitalDashboard: React.FC = () => {
               <option value="ACTIVE_TRAUMA">🟠 Severe Injury / Accident (Needed in &lt;1 hour)</option>
               <option value="SCHEDULED_EMERGENCY_RESERVE">🟡 Urgent Surgery (Needed in &lt;4 hours)</option>
               <option value="ROUTINE_CLINICAL">🟢 Standard Delivery (Needed in &lt;24 hours)</option>
+            </select>
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
+              Fulfillment Strategy
+            </label>
+            <select
+              id="intake-fulfillment-mode"
+              className="select-field"
+              value={fulfillmentMode}
+              onChange={(e) => setFulfillmentMode(e.target.value as 'AUTO' | 'DIRECT_DONOR')}
+            >
+              <option value="AUTO">⚡ Auto-Match (Cold-Chain Inventory first, then Volunteer Donors)</option>
+              <option value="DIRECT_DONOR">🚨 Direct Volunteer Donor Dispatch (Broadcast to Live Donors immediately)</option>
             </select>
           </div>
 

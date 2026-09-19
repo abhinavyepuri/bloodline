@@ -15,3 +15,4 @@ val TextSecondary = Color(0xFF94A3B8)
 
 val UrgentAmber = Color(0xFFF59E0B)
 val SuccessGreen = Color(0xFF10B981)
+val CyanAccent = Color(0xFF06B6D4)

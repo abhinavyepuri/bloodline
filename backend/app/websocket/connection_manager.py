@@ -193,6 +193,7 @@ class ConnectionManager:
     async def broadcast_to_donors(self, donor_ids: Iterable[str], message: dict) -> None:
         """Target specific donors by their Donor id across all cluster nodes."""
         channels = [f"entity:{d}" for d in donor_ids if d]
+        channels.append("role:DONOR")
         if channels:
             await self._publish_to_backplane(channels, message)
 

@@ -188,6 +188,30 @@ class ConcurrencyLockManager:
                     return index
             return None
 
+    async def claim_unit_slots(
+        self,
+        request_id: str,
+        donor_id: str,
+        max_units: int,
+        count: int = 1,
+        ttl_seconds: int = 86400,
+    ) -> List[int]:
+        """
+        Atomically claim up to ``count`` free unit slots for this donor.
+        Returns a list of claimed slot indices.
+        """
+        if max_units <= 0 or count <= 0:
+            return []
+
+        claimed: List[int] = []
+        for index in range(max(max_units, 1)):
+            if len(claimed) >= count:
+                break
+            key = self._slot_key(request_id, index)
+            if await self.redis.set(key, donor_id, nx=True, ex=ttl_seconds):
+                claimed.append(index)
+        return claimed
+
     async def donor_slot(self, request_id: str, donor_id: str, max_units: int) -> Optional[int]:
         """The slot index this donor already holds on this request, if any."""
         for index in range(max(max_units, 1)):

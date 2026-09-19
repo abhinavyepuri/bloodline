@@ -44,6 +44,8 @@ export const DonorDashboard: React.FC = () => {
 
   useEffect(() => {
     fetchDonorData();
+    const interval = setInterval(fetchDonorData, 4000);
+    return () => clearInterval(interval);
   }, [fetchDonorData, user]);
 
   useEffect(() => {
