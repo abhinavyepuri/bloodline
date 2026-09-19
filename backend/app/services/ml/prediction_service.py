@@ -258,3 +258,28 @@ class PredictionService:
         )
 
         return recommendations
+
+    @classmethod
+    async def get_transfer_recommendations_from_evaluations(
+        cls,
+        db: AsyncSession,
+        evaluations: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Computes inter-facility transfer recommendations from pre-computed evaluations.
+        Use this when you already have evaluate_network() results to avoid running it twice.
+        """
+        banks_res = await db.execute(select(BloodBank))
+        all_banks = banks_res.scalars().all()
+
+        facility_locations = {
+            b.id: {"latitude": float(b.latitude), "longitude": float(b.longitude)}
+            for b in all_banks
+            if b.latitude is not None and b.longitude is not None
+        }
+
+        return TransferRecommendationService.generate_recommendations(
+            evaluations=evaluations,
+            facility_locations=facility_locations,
+        )
+

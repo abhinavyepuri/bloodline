@@ -51,6 +51,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             ):
                 return await call_next(request)
 
+        # Fast-path: skip Redis for read-only requests to non-auth paths (no brute-force risk).
+        # Does NOT apply when X-Testing: false forces the rate limiter on (e.g. in test assertions).
+        method = request.method.upper()
+        is_auth_path = "/auth/login" in path or "/auth/register" in path
+        if not is_explicit_test and method in ("GET", "HEAD") and not is_auth_path:
+            return await call_next(request)
+
         # Determine client identifier (authenticated user ID from Authorization header hash or client IP)
         client_ip = request.client.host if request.client else "unknown"
         auth_header = request.headers.get("Authorization", "")

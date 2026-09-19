@@ -435,7 +435,7 @@ async def get_active_emergency_alerts(
                 RequestStatus.PENDING_EVALUATION,
             ])
         )
-        .order_by(BloodRequest.calculated_urgency_score.desc())
+        .order_by(BloodRequest.created_at.desc(), BloodRequest.calculated_urgency_score.desc())
     )
 
     active_requests = [

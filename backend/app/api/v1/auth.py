@@ -19,14 +19,17 @@ async def register_user(req: RegisterRequest, db: AsyncSession = Depends(get_db)
     normalized_email = req.email.lower().strip()
     normalized_phone = req.phone_number.strip()
 
-    # Check email uniqueness (case-insensitive)
-    existing_email = await db.execute(select(User).where(func.lower(User.email) == normalized_email))
-    if existing_email.scalars().first():
-        raise HTTPException(status_code=400, detail="User with this email already exists")
-
-    # Check phone number uniqueness
-    existing_phone = await db.execute(select(User).where(User.phone_number == normalized_phone))
-    if existing_phone.scalars().first():
+    # Single query: check email AND phone uniqueness in one DB round-trip (was two separate queries)
+    from sqlalchemy import or_
+    conflict = await db.execute(
+        select(User).where(
+            or_(User.email == normalized_email, User.phone_number == normalized_phone)
+        )
+    )
+    existing = conflict.scalars().first()
+    if existing:
+        if existing.email == normalized_email:
+            raise HTTPException(status_code=400, detail="User with this email already exists")
         raise HTTPException(status_code=400, detail="User with this phone number already exists")
 
     # Normalize role to UserRole enum (supports 'hospital', 'HOSPITAL', etc.)
@@ -104,7 +107,8 @@ async def register_user(req: RegisterRequest, db: AsyncSession = Depends(get_db)
 async def login_user(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     """Authenticate and obtain JWT access token."""
     normalized_email = req.email.lower().strip()
-    result = await db.execute(select(User).where(func.lower(User.email) == normalized_email))
+    # Use direct equality on the pre-normalized email — PostgreSQL can use the btree index on `email`
+    result = await db.execute(select(User).where(User.email == normalized_email))
     user = result.scalars().first()
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect email or password")

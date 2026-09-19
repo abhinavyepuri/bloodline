@@ -8,6 +8,7 @@ interface LoginResponse {
   role: UserRole;
   user_id: string;
   full_name: string;
+  user?: User;
 }
 
 export interface RegisterPayload {
@@ -60,16 +61,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => setUnauthorizedHandler(null);
   }, [clearSession]);
 
-  const loadProfile = useCallback(async (accessToken: string, role: UserRole) => {
-    setAuthToken(accessToken);
-    setToken(accessToken);
-    setActiveRole(role);
-    localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
-    localStorage.setItem(ROLE_STORAGE_KEY, role);
+  const loadProfile = useCallback(
+    async (accessToken: string, role: UserRole, existingUser?: User) => {
+      setAuthToken(accessToken);
+      setToken(accessToken);
+      setActiveRole(role);
+      localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+      localStorage.setItem(ROLE_STORAGE_KEY, role);
 
-    const profile = await api.get<User>('/auth/me');
-    setUser(profile);
-  }, []);
+      if (existingUser) {
+        // Fresh login — user data already came with the token response, no extra round-trip
+        setUser(existingUser);
+      } else {
+        // Session restore — validate the stored token is still good by fetching the profile
+        const { api } = await import('../lib/api');
+        const profile = await api.get<User>('/auth/me');
+        setUser(profile);
+      }
+    },
+    []
+  );
 
   const login = useCallback(
     async (email: string, password: string) => {
@@ -80,7 +91,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: email.trim().toLowerCase(),
           password,
         });
-        await loadProfile(data.access_token, data.role);
+        await loadProfile(data.access_token, data.role, data.user);
       } catch (err) {
         clearSession();
         const msg = err instanceof Error ? err.message : 'Sign-in failed. Please verify your credentials.';

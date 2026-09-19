@@ -68,7 +68,7 @@ class BloodRequest(TimestampedModel):
     status = Column(SQLEnum(RequestStatus), default=RequestStatus.PENDING_EVALUATION, index=True, nullable=False)
 
     hospital = relationship("Hospital", backref="requests")
-    allocations = relationship("Allocation", back_populates="request")
+    allocations = relationship("Allocation", back_populates="request", order_by="desc(Allocation.created_at)")
 
     # -- Derived read-only views -------------------------------------------------
     # These are plain properties so Pydantic's ``from_attributes`` picks them up

@@ -557,11 +557,62 @@ async def list_incoming_hospital_orders(
             selectinload(BloodRequest.allocations).selectinload(Allocation.inventory_unit),
             selectinload(BloodRequest.allocations).selectinload(Allocation.donor),
         )
-        .order_by(BloodRequest.calculated_urgency_score.desc(), BloodRequest.created_at.desc())
+        .order_by(BloodRequest.created_at.desc(), BloodRequest.calculated_urgency_score.desc())
     )
     req_results = (await db.execute(req_query)).scalars().all()
 
     now = datetime.now(timezone.utc)
+
+    # ── Batch-load compatible available units ──────────────────────────────────
+    # Collect every (blood_group, component_type) combination we'll need across
+    # all open requests that still have a shortfall. One single DB query replaces
+    # the previous per-request loop that caused N+1 queries.
+    open_requests_needing_units = [
+        req for req in req_results
+        if req.status not in CLOSED_REQUEST_STATUSES
+    ]
+
+    needed_combos: set[tuple[str, object]] = set()
+    for req in open_requests_needing_units:
+        covered = sum(
+            1 for a in (req.allocations or [])
+            if a.status in (AllocationStatus.HARD_LOCKED, AllocationStatus.IN_TRANSIT)
+        )
+        if req.units_requested - covered > 0:
+            compat_groups = MatchingEngineService.get_compatible_donor_types(
+                req.required_blood_group, is_plasma=is_plasma_derived(req.component_type)
+            )
+            for bg in compat_groups:
+                needed_combos.add((bg, req.component_type))
+
+    # Single batched query for ALL needed (blood_group, component_type) pairs
+    available_units_by_key: dict[tuple[str, str], list[InventoryUnit]] = {}
+    if needed_combos:
+        combo_filters = [
+            and_(
+                InventoryUnit.blood_group == bg,
+                InventoryUnit.component_type == ct,
+            )
+            for bg, ct in needed_combos
+        ]
+        avail_q = (
+            select(InventoryUnit)
+            .where(
+                and_(
+                    or_(*combo_filters),
+                    InventoryUnit.status == UnitStatus.AVAILABLE,
+                    InventoryUnit.expiry_date > now,
+                    *([InventoryUnit.blood_bank_id == bank.id] if bank else []),
+                )
+            )
+            .order_by(InventoryUnit.expiry_date.asc())
+        )
+        all_avail = (await db.execute(avail_q)).scalars().all()
+        for u in all_avail:
+            key = (u.blood_group, u.component_type.value if hasattr(u.component_type, 'value') else str(u.component_type))
+            available_units_by_key.setdefault(key, []).append(u)
+    # ──────────────────────────────────────────────────────────────────────────
+
     orders_list = []
     for req in req_results:
         hosp = req.hospital
@@ -570,7 +621,13 @@ async def list_incoming_hospital_orders(
 
         allocated_units = []
         volunteer_donors = []
-        for alloc in (req.allocations or []):
+        # Sort allocations in chronological order of when they were issued (newest first)
+        sorted_allocs = sorted(
+            req.allocations or [],
+            key=lambda a: a.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        for alloc in sorted_allocs:
             if alloc.inventory_unit:
                 if bank and alloc.inventory_unit.blood_bank_id != bank.id:
                     continue
@@ -609,34 +666,23 @@ async def list_incoming_hospital_orders(
         )
         shortfall = max(0, req.units_requested - covered_count)
 
+        # Look up pre-fetched compatible units from the batch map — zero extra DB calls
         compatible_available_units = []
         if req.status not in CLOSED_REQUEST_STATUSES and shortfall > 0:
             compat_groups = MatchingEngineService.get_compatible_donor_types(
                 req.required_blood_group, is_plasma=is_plasma_derived(req.component_type)
             )
-            avail_q = (
-                select(InventoryUnit)
-                .where(
-                    and_(
-                        InventoryUnit.blood_group.in_(compat_groups),
-                        InventoryUnit.component_type == req.component_type,
-                        InventoryUnit.status == UnitStatus.AVAILABLE,
-                        InventoryUnit.expiry_date > now,
-                        *( [InventoryUnit.blood_bank_id == bank.id] if bank else [] )
+            comp_type_val = req.component_type.value if hasattr(req.component_type, 'value') else str(req.component_type)
+            for bg in compat_groups:
+                for u in available_units_by_key.get((bg, comp_type_val), []):
+                    compatible_available_units.append(
+                        {
+                            "unit_id": u.id,
+                            "batch_number": u.batch_number,
+                            "blood_group": u.blood_group,
+                            "expiry_date": u.expiry_date.isoformat(),
+                        }
                     )
-                )
-                .order_by(InventoryUnit.expiry_date.asc())
-            )
-            avail_units = (await db.execute(avail_q)).scalars().all()
-            for u in avail_units:
-                compatible_available_units.append(
-                    {
-                        "unit_id": u.id,
-                        "batch_number": u.batch_number,
-                        "blood_group": u.blood_group,
-                        "expiry_date": u.expiry_date.isoformat(),
-                    }
-                )
 
         orders_list.append(
             {
@@ -662,6 +708,7 @@ async def list_incoming_hospital_orders(
         )
 
     return orders_list
+
 
 
 @router.post("/orders/{request_id}/accept")

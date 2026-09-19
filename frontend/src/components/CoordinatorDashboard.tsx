@@ -91,23 +91,32 @@ export const CoordinatorDashboard: React.FC = () => {
   const [transfersPage, setTransfersPage] = useState(1);
 
   const tickerItems = useMemo(() => {
-    const live = events.map((evt, idx) => ({
-      id: `live-${idx}-${evt.type}`,
-      type: evt.type || 'CLUSTER_EVENT',
-      message: evt.message || (evt as any).data?.message || (typeof evt === 'string' ? evt : JSON.stringify(evt)),
-      timestamp: (evt as any).timestamp ? new Date((evt as any).timestamp).toLocaleTimeString() : new Date().toLocaleTimeString(),
-      isLive: true,
-    }));
+    const live = events.map((evt, idx) => {
+      const ts = (evt as any).timestamp;
+      const rawTime = ts ? new Date(ts).getTime() : Date.now() - idx * 1000;
+      return {
+        id: `live-${idx}-${evt.type}`,
+        type: evt.type || 'CLUSTER_EVENT',
+        message: evt.message || (evt as any).data?.message || (typeof evt === 'string' ? evt : JSON.stringify(evt)),
+        timestamp: ts ? new Date(ts).toLocaleTimeString() : new Date().toLocaleTimeString(),
+        rawTime,
+        isLive: true,
+      };
+    });
 
-    const audit = auditLogs.map((log) => ({
-      id: `audit-${log.id}`,
-      type: log.decision_type || 'SYSTEM_DECISION',
-      message: log.rationale_summary || `Allocation evaluated for request #${log.request_id.slice(0, 8)}`,
-      timestamp: log.created_at ? new Date(log.created_at).toLocaleTimeString() : 'Recent',
-      isLive: false,
-    }));
+    const audit = auditLogs.map((log) => {
+      const rawTime = log.created_at ? new Date(log.created_at).getTime() : 0;
+      return {
+        id: `audit-${log.id}`,
+        type: log.decision_type || 'SYSTEM_DECISION',
+        message: log.rationale_summary || `Allocation evaluated for request #${log.request_id.slice(0, 8)}`,
+        timestamp: log.created_at ? new Date(log.created_at).toLocaleTimeString() : 'Recent',
+        rawTime,
+        isLive: false,
+      };
+    });
 
-    return [...live, ...audit].slice(0, 25);
+    return [...live, ...audit].sort((a, b) => b.rawTime - a.rawTime).slice(0, 25);
   }, [events, auditLogs]);
 
   const fetchData = useCallback(async () => {
@@ -473,9 +482,12 @@ export const CoordinatorDashboard: React.FC = () => {
             </div>
           ) : (
             (() => {
-              const totalReqs = requests.length;
+              const sortedRequests = [...requests].sort(
+                (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+              );
+              const totalReqs = sortedRequests.length;
               const startIdx = (reqsPage - 1) * PAGE_SIZE;
-              const visibleReqs = requests.slice(startIdx, startIdx + PAGE_SIZE);
+              const visibleReqs = sortedRequests.slice(startIdx, startIdx + PAGE_SIZE);
               const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE) || 1;
               return (
                 <div>

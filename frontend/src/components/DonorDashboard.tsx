@@ -341,20 +341,22 @@ export const DonorDashboard: React.FC = () => {
     setDismissedAlertIds((prev) => [...prev, requestId]);
   };
 
-  const matchingAlerts = activeAlerts.filter(
-    (alert) => !donorProfile || alert.required_blood_group === donorProfile.blood_group
-  );
+  const matchingAlerts = activeAlerts
+    .filter((alert) => !donorProfile || alert.required_blood_group === donorProfile.blood_group)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   const visibleAlerts = matchingAlerts.filter(
     (alert) => !dismissedAlertIds.includes(alert.id)
   );
 
-  const activeCommitments = donationHistory.filter(
-    (item) => item.status !== 'COMPLETED' && item.status !== 'CANCELLED' && item.status !== 'TIMED_OUT' && item.status !== 'RE_OPTIMIZED'
-  );
-  const completedHistory = donationHistory.filter(
-    (item) => item.status === 'COMPLETED'
-  );
+  const activeCommitments = donationHistory
+    .filter(
+      (item) => item.status !== 'COMPLETED' && item.status !== 'CANCELLED' && item.status !== 'TIMED_OUT' && item.status !== 'RE_OPTIMIZED'
+    )
+    .sort((a, b) => new Date(b.donated_at).getTime() - new Date(a.donated_at).getTime());
+  const completedHistory = donationHistory
+    .filter((item) => item.status === 'COMPLETED')
+    .sort((a, b) => new Date(b.donated_at).getTime() - new Date(a.donated_at).getTime());
 
   // Clinical Clearance & Cooling Interval calculations (Standard Whole Blood recovery: 56 days)
   const lastDonation = donorProfile?.last_donation_date ? new Date(donorProfile.last_donation_date) : null;

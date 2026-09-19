@@ -84,10 +84,45 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   const { params: _params, token: _token, headers: _headers, ...fetchOptions } = options;
-  const response = await fetch(url, {
-    ...fetchOptions,
-    headers,
-  });
+
+  // 15-second hard timeout — abort the request if the backend is unreachable or stuck.
+  // We use a named flag so that when the *caller's* AbortController fires (e.g. the
+  // dashboard cancelling a stale in-flight fetch), we don't mistakenly show the
+  // "Request timed out" error — that abort is intentional and should be silently ignored.
+  const controller = new AbortController();
+  let didTimeout = false;
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, 15_000);
+
+  // Merge caller signal with our timeout signal
+  const callerSignal = fetchOptions.signal as AbortSignal | undefined;
+  if (callerSignal) {
+    callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...fetchOptions,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      if (didTimeout) {
+        // Real 15-second timeout — show the user a helpful message
+        throw new Error('Request timed out. Please check your connection and try again.');
+      }
+      // Deliberate cancel by the caller (e.g. component unmount / stale fetch cancel)
+      // — silently re-throw so callers can handle it
+      throw err;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (response.status === 401) {
     if (unauthorizedHandler) {
@@ -154,13 +189,27 @@ export async function loginRequest<T = any>(
     ? path
     : `${API_V1}${path.startsWith('/') ? '' : '/'}${path}`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(credentials),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15_000);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(credentials),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Login request timed out. Please check your connection and try again.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));

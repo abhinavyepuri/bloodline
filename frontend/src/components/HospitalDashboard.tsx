@@ -386,9 +386,12 @@ export const HospitalDashboard: React.FC = () => {
           </div>
         ) : (
           (() => {
-            const totalReqs = requests.length;
+            const sortedRequests = [...requests].sort(
+              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
+            const totalReqs = sortedRequests.length;
             const startIdx = (reqsPage - 1) * PAGE_SIZE;
-            const visibleReqs = requests.slice(startIdx, startIdx + PAGE_SIZE);
+            const visibleReqs = sortedRequests.slice(startIdx, startIdx + PAGE_SIZE);
             const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE) || 1;
             return (
               <div>
@@ -434,7 +437,10 @@ export const HospitalDashboard: React.FC = () => {
                                 const bankGroups: Record<string, { count: number; batches: string[]; alloc: typeof req.allocations[0] }> = {};
                                 const donorGroups: Record<string, { count: number; alloc: typeof req.allocations[0] }> = {};
 
-                                req.allocations.forEach((alloc) => {
+                                const sortedAllocations = [...req.allocations].sort(
+                                  (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+                                );
+                                sortedAllocations.forEach((alloc) => {
                                   if (alloc.source_type === 'LIVE_DONOR' && alloc.donor_id) {
                                     if (!donorGroups[alloc.donor_id]) {
                                       donorGroups[alloc.donor_id] = { count: 0, alloc };

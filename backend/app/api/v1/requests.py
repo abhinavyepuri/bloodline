@@ -272,7 +272,7 @@ async def list_blood_requests(
         select(BloodRequest)
         .options(*_RELOAD_OPTIONS)
         .order_by(
-            BloodRequest.calculated_urgency_score.desc(), BloodRequest.created_at.desc()
+            BloodRequest.created_at.desc(), BloodRequest.calculated_urgency_score.desc()
         )
     )
 

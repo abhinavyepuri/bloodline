@@ -43,6 +43,9 @@ async def get_prediction_summary(
         if bb:
             blood_bank_id = bb.id
 
+    # Run evaluate_network ONCE and reuse the result for both summary counts and
+    # transfer recommendations — previously get_transfer_recommendations() also called
+    # evaluate_network internally, doubling all ML inference work and causing timeouts.
     evaluations = await PredictionService.evaluate_network(
         db=db, blood_bank_id=blood_bank_id
     )
@@ -54,7 +57,9 @@ async def get_prediction_summary(
     monitor_count = sum(1 for e in evaluations if e["operational_status"] == "Monitor Inventory")
     stable_count = sum(1 for e in evaluations if e["operational_status"] == "Stable")
 
-    transfers = await PredictionService.get_transfer_recommendations(db=db)
+    transfers = await PredictionService.get_transfer_recommendations_from_evaluations(
+        db=db, evaluations=evaluations
+    )
 
     return PredictionSummaryOut(
         total_series_evaluated=len(evaluations),

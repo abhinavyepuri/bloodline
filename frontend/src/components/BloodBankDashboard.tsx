@@ -124,7 +124,7 @@ export const BloodBankDashboard: React.FC = () => {
 
   // Expanded orders & desk sorting/filtering
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
-  const [deskSortKey, setDeskSortKey] = useState<DeskSortKey>('urgency');
+  const [deskSortKey, setDeskSortKey] = useState<DeskSortKey>('created_at');
   const [deskSortAsc, setDeskSortAsc] = useState<boolean>(false);
   const [deskFilter, setDeskFilter] = useState<'ALL' | 'ACTION_REQUIRED' | 'DISPATCHED'>('ALL');
   const [deskSearch, setDeskSearch] = useState<string>('');
@@ -162,38 +162,60 @@ export const BloodBankDashboard: React.FC = () => {
     { id: '3', blood_group: 'A+', component_type: 'PLATELETS', quantity: 3, volume_ml: 250, expiry_days: 5 },
   ]);
 
+  // Ref to abort any in-flight fetch before starting a new one — prevents race-condition state overwrites
+  const fetchAbortRef = React.useRef<AbortController | null>(null);
+
   const fetchInventoryAndOrders = useCallback(async () => {
+    // Cancel any previous in-flight request before starting a new one
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+    }
+    fetchAbortRef.current = new AbortController();
+    const signal = fetchAbortRef.current.signal;
+
     setLoading(true);
     try {
       const [invData, ordersData, reqData, donorsData, forecastData, summaryData] = await Promise.all([
         api.get<InventoryUnit[]>('/inventory'),
         api.get<HospitalOrder[]>('/inventory/orders'),
         api.get<BloodRequest[]>('/requests'),
-        api.get<DonorPublic[]>('/donors'),
+        // Use server-side filter — avoids loading all donors just to discard most client-side
+        api.get<DonorPublic[]>('/donors', { params: { available_only: true } }),
         api.get<SeriesForecast[]>('/predictions/forecast').catch(() => [] as SeriesForecast[]),
         api.get<PredictionSummary>('/predictions/summary').catch(() => null),
       ]);
+
+      if (signal.aborted) return; // discard result if a newer fetch already started
+
       setUnits(invData);
       setOrders(ordersData);
       setActiveRequests(reqData);
       setActiveDonors(donorsData.filter((d) => d.is_available));
       setForecasts(forecastData);
       setForecastSummary(summaryData);
+      setError(null);
     } catch (err) {
+      if (signal.aborted) return; // silently ignore aborted fetches
       console.error('Failed to fetch inventory or orders:', err);
       setError(err instanceof Error ? err.message : 'Could not load blood-bank data.');
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // Initial load on mount
     fetchInventoryAndOrders();
-    // Automated polling every 3 seconds ensures requests appear in real time on the desk
+    // 30-second fallback heartbeat — WebSocket events drive real-time updates;
+    // this only catches cases where the WebSocket connection drops silently.
     const interval = setInterval(() => {
       fetchInventoryAndOrders();
-    }, 3000);
-    return () => clearInterval(interval);
+    }, 30_000);
+    return () => {
+      clearInterval(interval);
+      // Abort any in-flight request on unmount
+      fetchAbortRef.current?.abort();
+    };
   }, [fetchInventoryAndOrders]);
 
   useEffect(() => {
@@ -523,10 +545,13 @@ export const BloodBankDashboard: React.FC = () => {
   ).length;
 
   const volunteerAllocations = activeRequests.flatMap(req =>
-    (req.allocations || []).filter((a) => a.source_type === 'LIVE_DONOR').map((a) => ({
-      request: req,
-      allocation: a
-    }))
+    (req.allocations || [])
+      .filter((a) => a.source_type === 'LIVE_DONOR')
+      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+      .map((a) => ({
+        request: req,
+        allocation: a
+      }))
   );
 
   // Map active donors, and attach allocation info if they have one.
@@ -1168,9 +1193,12 @@ export const BloodBankDashboard: React.FC = () => {
           </div>
         ) : (
           (() => {
-            const totalReqs = activeRequests.length;
+            const sortedActiveReqs = [...activeRequests].sort(
+              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
+            const totalReqs = sortedActiveReqs.length;
             const startIdx = (requestsPage - 1) * PAGE_SIZE;
-            const visibleReqs = activeRequests.slice(startIdx, startIdx + PAGE_SIZE);
+            const visibleReqs = sortedActiveReqs.slice(startIdx, startIdx + PAGE_SIZE);
             const totalReqPages = Math.ceil(totalReqs / PAGE_SIZE) || 1;
             return (
               <div>
