@@ -30,6 +30,9 @@ class MainActivity : ComponentActivity() {
                     composable("login") {
                         LoginScreen(
                             onLoginSuccess = { token, role ->
+                                // Start background periodic location heartbeat
+                                com.smartblood.mobile.data.workers.LocationHeartbeatWorker.startPeriodicHeartbeat(this@MainActivity)
+
                                 // Start WebSocket client for real-time dispatch alerts
                                 webSocketClient = BloodWebSocketClient(
                                     onNotificationReceived = { notification ->
@@ -58,6 +61,7 @@ class MainActivity : ComponentActivity() {
                             onLogout = {
                                 ApiClient.setAuthToken(null)
                                 webSocketClient?.disconnect()
+                                com.smartblood.mobile.data.workers.LocationHeartbeatWorker.cancelPeriodicHeartbeat(this@MainActivity)
                                 navController.navigate("login") {
                                     popUpTo("donor_home") { inclusive = true }
                                 }

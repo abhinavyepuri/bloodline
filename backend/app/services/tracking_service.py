@@ -1,5 +1,6 @@
 import logging
 import math
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,9 +55,11 @@ class LiveTrackingService:
         speed_kmh: Optional[float] = None,
     ) -> DonorTelemetryOut:
         # 1. Update donor's live coordinate and spatial point
+        now = datetime.now(timezone.utc)
         donor.latitude = latitude
         donor.longitude = longitude
         donor.location = func.ST_SetSRID(func.ST_Point(longitude, latitude), 4326)
+        donor.location_updated_at = now
 
         # 2. Check for an active in-transit allocation
         alloc_res = await db.execute(

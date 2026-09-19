@@ -46,9 +46,20 @@ class DonorOut(BaseModel):
     total_successful_donations: int
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    location_updated_at: Optional[datetime] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DonorHeartbeatIn(BaseModel):
+    latitude: float = Field(..., ge=-90.0, le=90.0, description="Current GPS latitude")
+    longitude: float = Field(..., ge=-180.0, le=180.0, description="Current GPS longitude")
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
 
 
 class DonorPublicOut(BaseModel):

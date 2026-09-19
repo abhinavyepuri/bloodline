@@ -1,34 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { api } from '../lib/api';
 import { BloodRequest, Donor, DonorRespondResult } from '../types';
-import { UserCheck, MapPin, CheckCircle, XCircle, Clock, AlertCircle, X, Radio, Navigation } from 'lucide-react';
-
-const RESPONSE_WINDOW_SECONDS = 180;
-
-/** mm:ss for a remaining number of seconds. */
-function formatCountdown(seconds: number): string {
-  const safe = Math.max(0, seconds);
-  const mins = Math.floor(safe / 60);
-  const secs = safe % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
-
-/**
- * Ticking clock used for response countdowns.
- *
- * Runs a single interval for the whole dashboard rather than one per alert.
- */
-function useCountdown(active: boolean): number {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const interval = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(interval);
-  }, [active]);
-  return tick;
-}
+import { UserCheck, MapPin, CheckCircle, XCircle, AlertCircle, X, Radio, Navigation } from 'lucide-react';
 
 export const DonorDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -40,8 +15,6 @@ export const DonorDashboard: React.FC = () => {
   const [lastResult, setLastResult] = useState<DonorRespondResult | null>(null);
   /** Alerts the donor has pushed aside, so the full-screen panel is not permanent. */
   const [dismissedAlertIds, setDismissedAlertIds] = useState<string[]>([]);
-  /** Local anchors so the countdown keeps moving between server refreshes. */
-  const alertDeadlinesRef = useRef<Record<string, number>>({});
 
   // GPS & Telemetry Tracking State
   const [gpsSyncing, setGpsSyncing] = useState(false);
@@ -57,14 +30,6 @@ export const DonorDashboard: React.FC = () => {
       ]);
       setDonorProfile(profile);
       setActiveAlerts(alerts);
-
-      const now = Date.now();
-      const deadlines: Record<string, number> = {};
-      for (const alert of alerts) {
-        const seconds = alert.alert_expires_in_seconds ?? RESPONSE_WINDOW_SECONDS;
-        deadlines[alert.id] = now + seconds * 1000;
-      }
-      alertDeadlinesRef.current = deadlines;
 
       // Drop dismissals for alerts that no longer exist, so a re-issued alert reopens.
       setDismissedAlertIds((prev) => prev.filter((id) => alerts.some((a) => a.id === id)));
@@ -93,9 +58,6 @@ export const DonorDashboard: React.FC = () => {
       fetchDonorData();
     }
   }, [lastEvent, fetchDonorData]);
-
-  // Re-render every second while a response window is open.
-  const tick = useCountdown(activeAlerts.length > 0);
 
   const syncBrowserGps = () => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -167,6 +129,11 @@ export const DonorDashboard: React.FC = () => {
     }
   };
 
+  /** Per-alert bag count the donor has selected. */
+  const [bagCounts, setBagCounts] = useState<Record<string, number>>({});
+  /** Which alert is currently in the "confirm bags" inline flow. */
+  const [pendingAccept, setPendingAccept] = useState<string | null>(null);
+
   const toggleAvailability = async () => {
     if (!donorProfile) return;
     try {
@@ -183,17 +150,23 @@ export const DonorDashboard: React.FC = () => {
     }
   };
 
-  const handleRespond = async (requestId: string, action: 'ACCEPT' | 'DECLINE') => {
+  const handleRespond = async (requestId: string, action: 'ACCEPT' | 'DECLINE', bagsOffered?: number) => {
+    setPendingAccept(null);
     try {
+      const payload: Record<string, unknown> = { action };
+      if (action === 'ACCEPT' && bagsOffered && bagsOffered > 1) {
+        payload.bags_offered = bagsOffered;
+      }
       const result = await api.post<DonorRespondResult>(
         `/donors/requests/${requestId}/respond`,
-        { action }
+        payload
       );
 
       if (action === 'ACCEPT') {
         setLastResult(result);
+        const bagsText = bagsOffered && bagsOffered > 1 ? ` for ${bagsOffered} bags` : '';
         setResponseStatus({
-          text: 'Thank you! You are confirmed to help this patient. Please head toward the hospital.',
+          text: `Thank you! Your commitment${bagsText} is confirmed. Please head toward the hospital.`,
           ok: true,
         });
       } else {
@@ -206,6 +179,17 @@ export const DonorDashboard: React.FC = () => {
     }
   };
 
+  /** Opens the inline bag-count picker for a specific alert. */
+  const handleAcceptClick = (requestId: string, maxBags: number) => {
+    // If only 1 bag needed, skip the picker and accept immediately
+    if (maxBags <= 1) {
+      handleRespond(requestId, 'ACCEPT', 1);
+      return;
+    }
+    setBagCounts((prev) => ({ ...prev, [requestId]: prev[requestId] ?? 1 }));
+    setPendingAccept(requestId);
+  };
+
   const dismissAlert = (requestId: string) => {
     setDismissedAlertIds((prev) => [...prev, requestId]);
   };
@@ -213,13 +197,6 @@ export const DonorDashboard: React.FC = () => {
   const visibleAlerts = activeAlerts.filter(
     (alert) => !dismissedAlertIds.includes(alert.id)
   );
-
-  const deadlineFor = (alert: BloodRequest): number => {
-    return alertDeadlinesRef.current[alert.id] ?? Date.now() + RESPONSE_WINDOW_SECONDS * 1000;
-  };
-
-  // `tick` is read here so the countdown re-renders each second.
-  void tick;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: '1.5rem' }}>
@@ -501,8 +478,6 @@ export const DonorDashboard: React.FC = () => {
         {visibleAlerts.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {visibleAlerts.map((alert) => {
-              const remaining = Math.round((deadlineFor(alert) - Date.now()) / 1000);
-              const expired = remaining <= 0;
               const stillNeeded = alert.units_shortfall ?? alert.units_requested;
 
               return (
@@ -532,21 +507,24 @@ export const DonorDashboard: React.FC = () => {
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      {/* No countdown — donor can respond whenever they see this */}
                       <div style={{
                         display: 'flex',
                         alignItems: 'center',
                         gap: '0.4rem',
-                        background: expired ? 'rgba(100, 116, 139, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                        background: 'rgba(16, 185, 129, 0.12)',
                         padding: '0.4rem 0.8rem',
                         borderRadius: '8px',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
                       }}>
-                        <Clock size={16} color={expired ? 'var(--text-muted)' : 'var(--crimson-500)'} />
-                        <span style={{
-                          fontSize: '0.85rem',
-                          fontWeight: 800,
-                          color: expired ? 'var(--text-muted)' : 'var(--color-primary)',
-                        }}>
-                          {expired ? 'Window closed' : `Respond in ${formatCountdown(remaining)}`}
+                        <div style={{
+                          width: '8px', height: '8px', borderRadius: '50%',
+                          background: 'var(--emerald-500)',
+                          boxShadow: '0 0 6px var(--emerald-500)',
+                          animation: 'pulseGlow 2s infinite',
+                        }} />
+                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--emerald-500)' }}>
+                          Open — Respond when ready
                         </span>
                       </div>
                       <button
@@ -576,36 +554,130 @@ export const DonorDashboard: React.FC = () => {
                       {alert.units_covered > 0 && (
                         <> {alert.units_covered} of {alert.units_requested} bag(s) are already covered.</>
                       )}{' '}
-                      Each volunteer who accepts covers one bag.
+                      Each volunteer who accepts covers one bag. Accept only if your blood type ({donorProfile?.blood_group}) is compatible.
                     </p>
                   </div>
 
-                  <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-                    <button
-                      id={`btn-decline-${alert.id}`}
-                      onClick={() => handleRespond(alert.id, 'DECLINE')}
-                      className="btn btn-secondary"
-                      style={{ fontSize: '0.85rem', padding: '0.5rem 1rem' }}
-                    >
-                      <XCircle size={16} />
-                      I Can't Make It
-                    </button>
-                    <button
-                      id={`btn-accept-${alert.id}`}
-                      onClick={() => handleRespond(alert.id, 'ACCEPT')}
-                      disabled={expired}
-                      className="btn btn-primary"
-                      style={{
-                        fontSize: '0.85rem',
-                        padding: '0.5rem 1.25rem',
-                        opacity: expired ? 0.6 : 1,
-                        cursor: expired ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      <CheckCircle size={16} />
-                      I Can Help! (Accept & Head to Hospital)
-                    </button>
-                  </div>
+                  {/* ── Bag-count picker (shown after tapping "I Can Help!") ── */}
+                  {pendingAccept === alert.id ? (
+                    <div style={{
+                      marginTop: '1.25rem',
+                      background: 'rgba(239, 68, 68, 0.06)',
+                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                      borderRadius: '10px',
+                      padding: '1rem 1.25rem',
+                    }}>
+                      <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.75rem' }}>
+                        How many bags can you donate?
+                        <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: '0.4rem' }}>
+                          (max {stillNeeded} — the current shortfall)
+                        </span>
+                      </div>
+
+                      {/* Stepper */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                        <button
+                          onClick={() => setBagCounts(prev => ({ ...prev, [alert.id]: Math.max(1, (prev[alert.id] ?? 1) - 1) }))}
+                          disabled={(bagCounts[alert.id] ?? 1) <= 1}
+                          style={{
+                            width: '36px', height: '36px', borderRadius: '8px',
+                            border: '1.5px solid var(--border-subtle)',
+                            background: 'var(--color-bg)',
+                            fontSize: '1.2rem', fontWeight: 700,
+                            color: (bagCounts[alert.id] ?? 1) <= 1 ? 'var(--text-dim)' : 'var(--text-main)',
+                            cursor: (bagCounts[alert.id] ?? 1) <= 1 ? 'not-allowed' : 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}
+                        >−</button>
+
+                        <div style={{
+                          minWidth: '56px', textAlign: 'center',
+                          fontSize: '1.6rem', fontWeight: 800,
+                          color: 'var(--crimson-500)',
+                          lineHeight: 1,
+                        }}>
+                          {bagCounts[alert.id] ?? 1}
+                          <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                            {(bagCounts[alert.id] ?? 1) === 1 ? 'bag' : 'bags'}
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => setBagCounts(prev => ({ ...prev, [alert.id]: Math.min(stillNeeded, (prev[alert.id] ?? 1) + 1) }))}
+                          disabled={(bagCounts[alert.id] ?? 1) >= stillNeeded}
+                          style={{
+                            width: '36px', height: '36px', borderRadius: '8px',
+                            border: '1.5px solid var(--border-subtle)',
+                            background: 'var(--color-bg)',
+                            fontSize: '1.2rem', fontWeight: 700,
+                            color: (bagCounts[alert.id] ?? 1) >= stillNeeded ? 'var(--text-dim)' : 'var(--text-main)',
+                            cursor: (bagCounts[alert.id] ?? 1) >= stillNeeded ? 'not-allowed' : 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}
+                        >+</button>
+
+                        {/* Shortcut pills */}
+                        {stillNeeded > 1 && (
+                          <div style={{ display: 'flex', gap: '0.35rem', marginLeft: '0.5rem', flexWrap: 'wrap' }}>
+                            {Array.from({ length: stillNeeded }, (_, i) => i + 1).map(n => (
+                              <button
+                                key={n}
+                                onClick={() => setBagCounts(prev => ({ ...prev, [alert.id]: n }))}
+                                style={{
+                                  padding: '0.2rem 0.55rem',
+                                  borderRadius: '6px',
+                                  border: '1.5px solid',
+                                  borderColor: (bagCounts[alert.id] ?? 1) === n ? 'var(--crimson-500)' : 'var(--border-subtle)',
+                                  background: (bagCounts[alert.id] ?? 1) === n ? 'rgba(239,68,68,0.12)' : 'var(--color-bg)',
+                                  color: (bagCounts[alert.id] ?? 1) === n ? 'var(--crimson-500)' : 'var(--text-muted)',
+                                  fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer',
+                                }}
+                              >{n}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+                        <button
+                          onClick={() => setPendingAccept(null)}
+                          className="btn btn-secondary"
+                          style={{ fontSize: '0.82rem', padding: '0.45rem 0.9rem' }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleRespond(alert.id, 'ACCEPT', bagCounts[alert.id] ?? 1)}
+                          className="btn btn-primary"
+                          style={{ fontSize: '0.85rem', padding: '0.45rem 1.2rem' }}
+                        >
+                          <CheckCircle size={15} />
+                          Confirm — {bagCounts[alert.id] ?? 1} bag{(bagCounts[alert.id] ?? 1) > 1 ? 's' : ''} & Head to Hospital
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                      <button
+                        id={`btn-decline-${alert.id}`}
+                        onClick={() => handleRespond(alert.id, 'DECLINE')}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.85rem', padding: '0.5rem 1rem' }}
+                      >
+                        <XCircle size={16} />
+                        I Can't Make It
+                      </button>
+                      <button
+                        id={`btn-accept-${alert.id}`}
+                        onClick={() => handleAcceptClick(alert.id, stillNeeded)}
+                        className="btn btn-primary"
+                        style={{ fontSize: '0.85rem', padding: '0.5rem 1.25rem' }}
+                      >
+                        <CheckCircle size={16} />
+                        I Can Help! — Select Bags
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -10,7 +10,8 @@ data class DonorProfile(
     @SerializedName("is_available") val isAvailable: Boolean = true,
     @SerializedName("last_donation_date") val lastDonationDate: String? = null,
     @SerializedName("latitude") val latitude: Double? = null,
-    @SerializedName("longitude") val longitude: Double? = null
+    @SerializedName("longitude") val longitude: Double? = null,
+    @SerializedName("location_updated_at") val locationUpdatedAt: String? = null
 ) {
     val bloodType: String get() = bloodGroup ?: bloodTypeField ?: "O-"
 }

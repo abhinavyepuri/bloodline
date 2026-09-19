@@ -1,10 +1,10 @@
 # SmartBlood (Yarin) — Project Status
 
-**Last Updated:** September 18, 2026  
-**Current Phase:** Enterprise Hardening, Worker Engine, and Performance Optimization Complete  
+**Last Updated:** September 19, 2026  
+**Current Phase:** Real-Time Routing, Android Integration, Donor Location Freshness TTL & Background Heartbeats Complete  
 
 > **System Status Summary:**  
-> The backend is fully refactored, hardened, and running on Dockerized PostgreSQL 16 + PostGIS 3.4 and Redis 7.2. All high-latency tasks have been offloaded to a two-tier background processing architecture (FastAPI `BackgroundTasks` + standalone `app.worker` daemon). Concurrency locking operates via single-round-trip atomic Lua scripts, WebSockets scale horizontally across workers via Redis Pub/Sub, and database queries are accelerated with PostGIS GiST spatial and partial active inventory indexes. Security audits (Bandit) report **0 High, 0 Medium** vulnerabilities.
+> The backend is fully refactored, hardened, and running on Dockerized PostgreSQL 16 + PostGIS 3.4 and Redis 7.2. All high-latency tasks have been offloaded to a two-tier background processing architecture (FastAPI `BackgroundTasks` + standalone `app.worker` daemon). Concurrency locking operates via single-round-trip atomic Lua scripts, WebSockets scale horizontally across workers via Redis Pub/Sub, and database queries are accelerated with PostGIS GiST spatial and partial active inventory indexes. Real-time hospital-to-blood-bank order visibility, dynamic alert-zone enrollment, and full Android mobile integration are verified. Stale GPS issues are eliminated via a 60-minute Location Freshness TTL engine and Android `WorkManager` background heartbeats. Security audits (Bandit) report **0 High, 0 Medium** vulnerabilities.
 
 ---
 
@@ -18,18 +18,18 @@ SmartBlood (Yarin) is an intelligent, real-time emergency blood allocation and v
 
 | Layer | Technology | Status / Details |
 | :--- | :--- | :--- |
-| **Backend Framework** | FastAPI, Python 3.12/3.13 (async/await), Pydantic v2 | Fully operational; 28 versioned REST endpoints |
+| **Backend Framework** | FastAPI, Python 3.11/3.12 (async/await), Pydantic v2 | Fully operational; 29 versioned REST endpoints |
 | **Database & GIS** | PostgreSQL 16 + PostGIS 3.4 (`postgis/postgis:16-3.4`) | Running in Docker container `smartblood_postgres` on port `5432` |
 | **Cache & Concurrency** | Redis 7.2 (`redis:7.2-alpine`) via `redis.asyncio` | Running in Docker container `smartblood_redis` on port `6379` |
 | **Background Worker Engine** | Standalone Python process (`app.worker`) | Consumes push notification queues, DLQ, keyspace expirations, and expiry sweeps |
-| **ORM & Migrations** | SQLAlchemy 2.0 (async), GeoAlchemy2, Alembic | 3 migrations applied (`0001`, `0002`, `0003`) |
+| **ORM & Migrations** | SQLAlchemy 2.0 (async), GeoAlchemy2, Alembic | 4 migrations applied (`0001`, `0002`, `0003`, `0004`) |
 | **Spatial Indexing** | PostGIS GiST Indexes | Applied on `donors`, `blood_banks`, and `hospitals` locations |
-| **Query Optimization** | Filtered Partial B-Tree Index | `idx_inventory_active_search` on `AVAILABLE` units |
+| **Query Optimization** | Filtered Partial B-Tree Indexes | `idx_inventory_active_search` (shelf stock) & `idx_donors_location_freshness` (active donors) |
 | **Authentication & RBAC** | OAuth2 + JWT (python-jose), Passlib (bcrypt) | Stateless tokens with role-based endpoint guards |
 | **Real-Time Bus** | WebSockets + Redis Pub/Sub backplane | Multi-worker horizontal broadcast over `smartblood:ws:events` |
 | **Reliability & Security** | Idempotency, Rate Limiting, Request ID tracing | Sliding-window limiter, `Idempotency-Key` caching, correlation IDs |
-| **Frontend** | React 19 + TypeScript + Vite 8, `lucide-react`, oxlint | 5 role-specific dashboards with live WebSocket subscriptions |
-| **Mobile Client** | Native Android (Kotlin + Jetpack Compose) | Emergency dispatch intake, 1-tap responses, GPS telemetry |
+| **Frontend** | React 19 + TypeScript + Vite 8, `lucide-react`, oxlint | 5 role-specific dashboards with dynamic LAN host resolution |
+| **Mobile Client** | Native Android (Kotlin + Jetpack Compose + WorkManager) | Emergency dispatch intake, 1-tap responses, periodic location heartbeats, GPS telemetry |
 
 ---
 
@@ -59,6 +59,19 @@ The code enforces strict, typed domain models across all layers:
 - [x] `0003_enterprise_indexes.py`: 
   - GiST spatial indexes on `donors.location`, `blood_banks.location`, and `hospitals.location` for sub-5ms `ST_DWithin` geofence evaluations.
   - Partial composite index `idx_inventory_active_search` on `inventory_units (blood_group, component_type, expiry_date) WHERE status = 'AVAILABLE'` eliminating full table scans during FEFO matching.
+- [x] `0004_add_donor_location_updated_at.py`:
+  - Added `location_updated_at` (timestamp with time zone) to `donors`.
+  - Filtered composite index `idx_donors_location_freshness` on `donors (is_available, location_updated_at)`.
+
+### Real-Time Hospital-to-Blood-Bank Routing & Order Visibility
+- [x] **Hospital Request Visibility on Blood Bank Desk**: Fixed `selectinload` join and query filtering on `/api/v1/inventory/orders` so that when a hospital creates an emergency request, reserved inventory batches appear in real-time on the Blood Bank dispatch queue.
+- [x] **Dynamic Alert-Zone Enrollment**: Updated `/api/v1/donors/requests/active` to auto-enroll active compatible donors into the Redis alert zone even if they joined after initial broadcast.
+- [x] **Cross-Platform LAN Resolution**: Configured dynamic host resolution in Vite frontend and Android `ApiClient` allowing physical smartphones and laptops on the same Wi-Fi network to seamlessly communicate with the local backend.
+
+### Donor Location Freshness Engine & Periodic Background Heartbeats
+- [x] **Location Freshness TTL (`DONOR_LOCATION_TTL_MINUTES = 60`)**: Prevents stale coordinates (e.g., donor who moved from 3km to 10km away hours ago) from receiving false proximity emergency dispatches.
+- [x] **Two-Stage Prioritization in Geofencing**: Proximity searches prioritize donors with verified fresh locations ($\le 60$ minutes). If zero fresh donors exist in the area, resilient fallback alerts eligible donors in the expanded geofence.
+- [x] **Android `WorkManager` Heartbeats (`LocationHeartbeatWorker`)**: Mobile client runs a battery-efficient background heartbeat every 15 minutes, pinging `POST /api/v1/donors/me/heartbeat` with fresh GPS coordinates while the donor is `is_available = true`. Automatically stops on logout or standby.
 
 ### Distributed Concurrency & Locking (`app/core/redis.py`)
 - [x] **Atomic Lua Multi-Slot Claiming**: Replaced iterative Python slot claims with `LUA_CLAIM_SLOT` script. Evaluates $0 \dots N-1$ keys and executes `SET NX EX` in a single atomic $O(1)$ round-trip.
@@ -68,7 +81,7 @@ The code enforces strict, typed domain models across all layers:
 ### Real-Time Pub/Sub WebSockets (`app/websocket/connection_manager.py`)
 - [x] **Horizontal Redis Backplane**: Connection manager publishes events to Redis channel `smartblood:ws:events`.
 - [x] **Multi-Worker Synchronization**: Background listener subscribes to the Redis bus and distributes frames to locally connected WebSockets, ensuring seamless broadcast across multiple Uvicorn workers.
-- [x] **Authentication & Reaping**: Secure JWT query parameter authentication (`?token=...`), policy code 1008 rejection for unauthorized connections, and dead-socket reaping on send failure.
+- [x] **Thread-Safe Mobile Ingestion**: Android WebSocket client dispatches UI transitions on `runOnUiThread`, eliminating background-thread navigation crashes.
 
 ### Two-Tier Background Processing & Worker Daemon (`app/worker.py`)
 - [x] **Tier 1 (In-Process FastAPI `BackgroundTasks`)**: Offloads non-critical writes (audit logging, non-blocking notification dispatch) directly in the HTTP lifecycle.
@@ -85,13 +98,9 @@ The code enforces strict, typed domain models across all layers:
 - [x] **In-Transit Donor Telemetry (`app/services/tracking_service.py`, `POST /api/v1/donors/me/telemetry`)**: Computes real-time PostGIS distance/ETA for traveling donors and emits `DONOR_APPROACHING_WARD` when entering within 500m of the destination hospital.
 - [x] **Clinical SLA Metrics (`GET /api/v1/admin/metrics`)**: Exposes Mean Time to Sourcing (MTTS), donor conversion rate, and replan frequency.
 
-### Security Audit
-- [x] **Bandit Scan**: Executed over 5,364 lines of backend Python code with **0 High, 0 Medium** vulnerabilities detected.
-- [x] **RBAC Isolation**: Strict tenant isolation preventing hospitals from reading cross-tenant data, masking donor PII on public feeds, and requiring explicit hospital identification for coordinator actions.
-
 ---
 
-## 5. API Endpoints Reference (28 Routes)
+## 5. API Endpoints Reference (29 Routes)
 
 | Tag / Area | Method & Route | Description |
 | :--- | :--- | :--- |
@@ -105,8 +114,9 @@ The code enforces strict, typed domain models across all layers:
 | | `POST /api/v1/requests/{id}/fulfill` | Mark delivered/fulfilled; transition inventory to `DISPATCHED` |
 | **Donors** | `GET /api/v1/donors/me` | Fetch private clinical donor profile |
 | | `GET /api/v1/donors` | Staff-only sanitized donor directory (PII-free) |
-| | `PATCH /api/v1/donors/availability` | Toggle availability and update GPS coordinates |
-| | `GET /api/v1/donors/requests/active` | Get emergency requests broadcasting to this donor |
+| | `PATCH /api/v1/donors/availability` | Toggle availability and update GPS coordinates (`location_updated_at`) |
+| | `POST /api/v1/donors/me/heartbeat` | **[NEW]** Lightweight periodic background GPS refresh without altering availability |
+| | `GET /api/v1/donors/requests/active` | Get emergency requests broadcasting to this donor (with auto-enrollment) |
 | | `POST /api/v1/donors/respond` | Contextual 1-tap dispatch response for mobile |
 | | `POST /api/v1/donors/requests/{id}/respond` | Targeted dispatch response by UUID or shortcode |
 | | `POST /api/v1/donors/me/telemetry` | Stream live GPS coordinates; triggers 500m ward proximity alert |
@@ -138,7 +148,7 @@ Verify containers are healthy on ports `5432` (PostgreSQL/PostGIS) and `6379` (R
 ### Step 2: Initialize Database & Seed Demo Data
 ```bash
 cd backend
-./venv/Scripts/python.exe -m app.init_db   # Runs alembic upgrade head
+./venv/Scripts/python.exe -m app.init_db   # Runs alembic upgrade head (includes 0004)
 ./venv/Scripts/python.exe -m app.seed      # Seeds Section 14 synthetic scenario
 ```
 
@@ -177,6 +187,6 @@ All seeded accounts use password: `password123`
 | `HOSPITAL` | `hospital@smartblood.org` | Metro General Hospital (intake & tracking) |
 | `HOSPITAL` | `stjude@smartblood.org` | St. Jude Trauma Center (secondary tenant) |
 | `BLOOD_BANK` | `bloodbank@smartblood.org` | Metro Blood Services (cold-chain stock) |
-| `DONOR` | `alice@donor.org` | D1 (O−, 1.9km away, 98% reliability) |
-| `DONOR` | `bob@donor.org` | D2 (O−, 3.6km away, 92% reliability) |
+| `DONOR` | `alice@donor.org` | D1 (O−, 1.9km away, 98% reliability, fresh GPS) |
+| `DONOR` | `bob@donor.org` | D2 (O−, 3.6km away, 92% reliability, fresh GPS) |
 | `DONOR` | `charlie@donor.org` | D3 (A+, verifies compatibility matrix rejection) |

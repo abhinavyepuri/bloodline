@@ -109,6 +109,7 @@ class AllocationService:
         hospital: Optional[Hospital],
         radius_km: float,
         lock_mgr: ConcurrencyLockManager,
+        max_location_age_minutes: Optional[int] = None,
     ) -> List[Tuple[Donor, float]]:
         """Find eligible donors in range and register them in the request's alert zone."""
         donors = await self.donor_repo.find_eligible_donors_in_proximity(
@@ -117,6 +118,7 @@ class AllocationService:
             hospital_lng=hospital.longitude if hospital else DEFAULT_HOSPITAL_LNG,
             radius_km=radius_km,
             component_type=request.component_type,
+            max_location_age_minutes=max_location_age_minutes,
         )
         if donors:
             await lock_mgr.register_alerted_donors(
@@ -135,17 +137,38 @@ class AllocationService:
     ) -> Tuple[List[Tuple[Donor, float]], float]:
         """
         Search the default geofence first, then expand to the configured wider
-        radius before giving up.
+        radius before giving up. First checks donors with verified fresh locations (<= DONOR_LOCATION_TTL_MINUTES).
+        Falls back to all eligible donors only if no fresh-location donors are found.
         """
         radii: List[float] = [radius_km if radius_km is not None else settings.DEFAULT_GEOFENCE_RADIUS_KM]
         expanded = settings.EXPANDED_GEOFENCE_RADIUS_KM
         if expanded > radii[0]:
             radii.append(expanded)
 
+        # 1. Prioritize donors with fresh location updates within the TTL
         for radius in radii:
-            donors = await self._alert_proximity_donors(request, hospital, radius, lock_mgr)
+            donors = await self._alert_proximity_donors(
+                request,
+                hospital,
+                radius,
+                lock_mgr,
+                max_location_age_minutes=settings.DONOR_LOCATION_TTL_MINUTES,
+            )
             if donors:
                 return donors, radius
+
+        # 2. Resilient fallback: alert donors in range even if their last update exceeds TTL
+        for radius in radii:
+            donors = await self._alert_proximity_donors(
+                request,
+                hospital,
+                radius,
+                lock_mgr,
+                max_location_age_minutes=None,
+            )
+            if donors:
+                return donors, radius
+
         return [], radii[-1]
 
     # ------------------------------------------------------------ pipeline
@@ -470,14 +493,14 @@ class AllocationService:
 
     # ---------------------------------------------------- donor response
     async def process_donor_response(
-        self, request_id: str, donor_id: str, action: str
+        self, request_id: str, donor_id: str, action: str, bags_offered: int = 1
     ) -> Dict[str, Any]:
         """
         Process a donor's response to an emergency alert.
 
-        Each ACCEPT atomically claims **one unit slot** on the request, so a request
-        needing N units can be filled by N distinct donors. Only once every unit is
-        covered is the remainder of the alert zone stood down.
+        On ACCEPT, the donor can claim up to ``bags_offered`` unit slots (capped
+        at the remaining shortfall). Each accepted slot creates one Allocation
+        record, so a single donor committing N bags fills N slots atomically.
         """
         redis_conn = await get_redis()
         lock_mgr = ConcurrencyLockManager(redis_conn)

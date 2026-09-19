@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,16 +40,16 @@ class DonorRepository(BaseRepository[Donor]):
         hospital_lng: float,
         radius_km: float,
         component_type: Optional[BloodComponentType] = None,
+        max_location_age_minutes: Optional[int] = None,
     ) -> List[Tuple[Donor, float]]:
         """
         Find available, biologically compatible, clinically eligible donors within a
         spatial radius. Returns a list of ``(Donor, distance_in_km)`` ordered by
         proximity.
 
-        Eligibility is enforced in SQL (availability, minimum weight, and the
-        component-specific donation recovery window) so ineligible donors are never
-        alerted. ``donor_service.is_donor_eligible`` applies the same rules again at
-        accept time.
+        Eligibility is enforced in SQL (availability, minimum weight, component-specific
+        donation recovery window, and optional location freshness TTL) so ineligible
+        or stale donors are not alerted.
         """
         hospital_point = self._hospital_geography(hospital_lat, hospital_lng)
         radius_meters = radius_km * 1000.0
@@ -60,21 +60,29 @@ class DonorRepository(BaseRepository[Donor]):
 
         distance_km = (ST_Distance(Donor.location, hospital_point) / 1000.0).label("distance_km")
 
+        conditions = [
+            Donor.blood_group.in_(compatible_blood_groups),
+            Donor.is_available == True,  # noqa: E712 - SQLAlchemy needs ==
+            Donor.location.isnot(None),
+            Donor.weight_kg >= MIN_DONOR_WEIGHT_KG,
+            or_(
+                Donor.last_donation_date.is_(None),
+                Donor.last_donation_date <= cutoff_date,
+            ),
+            ST_DWithin(Donor.location, hospital_point, radius_meters),
+        ]
+
+        if max_location_age_minutes is not None:
+            cutoff_freshness = datetime.now(timezone.utc) - timedelta(
+                minutes=max_location_age_minutes
+            )
+            conditions.append(
+                func.coalesce(Donor.location_updated_at, Donor.updated_at) >= cutoff_freshness
+            )
+
         query = (
             select(Donor, distance_km)
-            .where(
-                and_(
-                    Donor.blood_group.in_(compatible_blood_groups),
-                    Donor.is_available == True,  # noqa: E712 - SQLAlchemy needs ==
-                    Donor.location.isnot(None),
-                    Donor.weight_kg >= MIN_DONOR_WEIGHT_KG,
-                    or_(
-                        Donor.last_donation_date.is_(None),
-                        Donor.last_donation_date <= cutoff_date,
-                    ),
-                    ST_DWithin(Donor.location, hospital_point, radius_meters),
-                )
-            )
+            .where(and_(*conditions))
             .order_by(distance_km.asc(), Donor.reliability_score.desc())
         )
 

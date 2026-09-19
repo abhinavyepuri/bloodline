@@ -8,14 +8,14 @@ async def update_db():
         # 1. Reset Alice last_donation_date to 2025-10-01
         await session.execute(text("""
             UPDATE donors 
-            SET last_donation_date = '2025-10-01', is_available = true 
+            SET last_donation_date = '2025-10-01', is_available = true, location_updated_at = NOW() 
             WHERE user_id = '0889d60d-163d-4e43-bf50-e7dd18d38429'
         """))
 
         # 2. Update Phani donor blood group to O- as well so universal donor tests work
         await session.execute(text("""
             UPDATE donors 
-            SET blood_group = 'O-', is_available = true 
+            SET blood_group = 'O-', is_available = true, location_updated_at = NOW() 
             WHERE user_id = '09827788-ed1c-47d6-b5b2-425c5b13b843'
         """))
 

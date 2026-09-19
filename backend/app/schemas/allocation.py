@@ -26,6 +26,11 @@ class DonorRespondRequest(BaseModel):
         default=None,
         description="Optional request ID or short code (e.g. 'REQ-8492' or UUID). If omitted, resolves automatically to the active alert.",
     )
+    bags_offered: Optional[int] = Field(
+        default=1,
+        ge=1,
+        description="Number of bags the donor can supply (ACCEPT only). Capped server-side at the remaining shortfall.",
+    )
 
     model_config = ConfigDict(
         extra="forbid",

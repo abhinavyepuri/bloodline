@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -13,7 +14,14 @@ from app.models.donor import Donor
 from app.models.request import BloodRequest, RequestStatus
 from app.models.user import User
 from app.schemas.allocation import DonorRespondOut, DonorRespondRequest
-from app.schemas.donor import DonorOut, DonorPublicOut, DonorTelemetryIn, DonorTelemetryOut, DonorUpdateAvailability
+from app.schemas.donor import (
+    DonorHeartbeatIn,
+    DonorOut,
+    DonorPublicOut,
+    DonorTelemetryIn,
+    DonorTelemetryOut,
+    DonorUpdateAvailability,
+)
 from app.schemas.request import BloodRequestOut
 from app.services.allocation_service import AllocationService
 from app.services.donor_service import is_plasma_derived
@@ -58,9 +66,11 @@ async def update_donor_availability(
     """[USER-FACING] Toggle donor active availability and ping current GPS location."""
     donor.is_available = update_in.is_available
     if update_in.latitude is not None and update_in.longitude is not None:
+        now = datetime.now(timezone.utc)
         donor.latitude = update_in.latitude
         donor.longitude = update_in.longitude
         donor.location = func.ST_SetSRID(func.ST_Point(update_in.longitude, update_in.latitude), 4326)
+        donor.location_updated_at = now
 
     await db.commit()
     await db.refresh(donor)
@@ -78,6 +88,28 @@ async def update_donor_availability(
         )
     )
 
+    return DonorOut.model_validate(donor)
+
+
+@router.post("/me/heartbeat", response_model=DonorOut)
+async def submit_location_heartbeat(
+    heartbeat: DonorHeartbeatIn,
+    db: AsyncSession = Depends(get_db),
+    donor: Donor = Depends(get_current_donor),
+    current_user: User = Depends(require_roles(UserRole.DONOR)),
+):
+    """
+    [USER-FACING] Lightweight periodic background location heartbeat.
+    Refreshes donor GPS position and location_updated_at without altering availability.
+    """
+    now = datetime.now(timezone.utc)
+    donor.latitude = heartbeat.latitude
+    donor.longitude = heartbeat.longitude
+    donor.location = func.ST_SetSRID(func.ST_Point(heartbeat.longitude, heartbeat.latitude), 4326)
+    donor.location_updated_at = now
+
+    await db.commit()
+    await db.refresh(donor)
     return DonorOut.model_validate(donor)
 
 
@@ -138,34 +170,42 @@ async def get_active_emergency_alerts(
     if not active_requests:
         return []
 
+    # ── Blood-type pre-filter ────────────────────────────────────────────────
+    # Only keep requests where this donor's blood group is biologically compatible.
+    # This avoids hitting Redis at all for requests the donor can never help with.
+    blood_compatible_requests = []
+    for req in active_requests:
+        compatible_groups = MatchingEngineService.get_compatible_donor_types(
+            req.required_blood_group, is_plasma=is_plasma_derived(req.component_type)
+        )
+        if donor.blood_group in compatible_groups:
+            blood_compatible_requests.append((req, compatible_groups))
+
+    if not blood_compatible_requests:
+        return []
+
     redis_conn = await get_redis()
     lock_mgr = ConcurrencyLockManager(redis_conn)
 
-    # Batch check membership and TTL for all candidate requests in a single round-trip
+    # Batch check membership and TTL for all compatible requests in a single round-trip
     pipe = redis_conn.pipeline()
-    for req in active_requests:
+    for req, _ in blood_compatible_requests:
         pipe.sismember(lock_mgr._zone_key(req.id), donor.id)
         pipe.ttl(lock_mgr._zone_key(req.id))
     raw_results = await pipe.execute()
 
     alerts: List[BloodRequestOut] = []
-    for idx, request in enumerate(active_requests):
+    for idx, (request, _compatible_groups) in enumerate(blood_compatible_requests):
         is_member = raw_results[idx * 2]
         ttl_val = raw_results[idx * 2 + 1]
-        ttl_seconds = ttl_val if isinstance(ttl_val, int) and ttl_val >= 0 else None
+        # -1 means key exists with no expiry (persist) → open indefinitely
+        # -2 means key missing → we'll enroll the donor below
+        ttl_seconds = None if ttl_val == -2 else (86400 if ttl_val == -1 else ttl_val)
 
-        # Biological compatibility: Plasma-derived components follow the plasma matrix, otherwise red-cell matrix.
-        compatible_groups = MatchingEngineService.get_compatible_donor_types(
-            request.required_blood_group, is_plasma=is_plasma_derived(request.component_type)
-        )
-        if donor.blood_group not in compatible_groups:
-            continue
-
-        # If not already recorded in Redis (e.g. registered after request or TTL expired),
-        # enroll this compatible donor so they can immediately claim a unit.
+        # If not already in the alert zone, enroll now (no TTL — open indefinitely)
         if not is_member:
-            await lock_mgr.register_alerted_donors(request.id, [donor.id], ttl_seconds=180)
-            ttl_seconds = 180
+            await lock_mgr.register_alerted_donors(request.id, [donor.id])
+            ttl_seconds = 86400
 
         alerts.append(
             BloodRequestOut.model_validate(request).model_copy(

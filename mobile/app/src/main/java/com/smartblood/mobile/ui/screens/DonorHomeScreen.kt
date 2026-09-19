@@ -102,10 +102,16 @@ fun DonorHomeScreen(
                             color = if (isAvailable) SuccessGreen else UrgentAmber
                         )
                     }
+                    val context = androidx.compose.ui.platform.LocalContext.current
                     Switch(
                         checked = isAvailable,
                         onCheckedChange = { checked ->
                             isAvailable = checked
+                            if (checked) {
+                                com.smartblood.mobile.data.workers.LocationHeartbeatWorker.startPeriodicHeartbeat(context)
+                            } else {
+                                com.smartblood.mobile.data.workers.LocationHeartbeatWorker.cancelPeriodicHeartbeat(context)
+                            }
                             coroutineScope.launch {
                                 try {
                                     ApiClient.service.updateAvailability(mapOf("is_available" to checked))

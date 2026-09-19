@@ -10,7 +10,7 @@ from app.models.request import TriageLevel, RequestStatus
 from app.schemas.auth import LoginRequest, RegisterRequest
 from app.schemas.user import UserOut
 from app.schemas.request import BloodRequestCreate, BloodRequestOut
-from app.schemas.donor import DonorCreate, DonorUpdateAvailability, DonorOut
+from app.schemas.donor import DonorCreate, DonorUpdateAvailability, DonorOut, DonorHeartbeatIn
 from app.schemas.inventory import InventoryUnitCreate, InventoryUnitUpdateStatus, InventoryUnitOut
 from app.schemas.allocation import DonorRespondRequest
 from app.schemas.audit import AllocationAuditLogOut
@@ -147,6 +147,38 @@ class TestStrictNormalizationAndValidation(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             DonorRespondRequest(action="invalid_action")
+
+    def test_donor_heartbeat_schema(self):
+        """Verify DonorHeartbeatIn validates coordinates and forbids extra fields."""
+        hb = DonorHeartbeatIn(latitude=12.9716, longitude=77.5946)
+        self.assertEqual(hb.latitude, 12.9716)
+        self.assertEqual(hb.longitude, 77.5946)
+
+        with self.assertRaises(ValidationError):
+            DonorHeartbeatIn(latitude=95.0, longitude=77.0)
+
+        with self.assertRaises(ValidationError):
+            DonorHeartbeatIn(latitude=12.0, longitude=77.0, extra="unwanted")
+
+    def test_donor_out_includes_location_updated_at(self):
+        """Verify DonorOut schema includes location_updated_at field."""
+        now = datetime.now(timezone.utc)
+        donor_dict = {
+            "id": "donor-123",
+            "user_id": "user-123",
+            "blood_group": "O-",
+            "date_of_birth": date(1995, 1, 1),
+            "weight_kg": 65.0,
+            "is_available": True,
+            "reliability_score": 0.95,
+            "total_successful_donations": 3,
+            "latitude": 12.97,
+            "longitude": 77.59,
+            "location_updated_at": now,
+            "created_at": now,
+        }
+        out = DonorOut(**donor_dict)
+        self.assertEqual(out.location_updated_at, now)
 
     def test_request_code_generation(self):
         """Verify that generate_request_code produces readable REQ-XXXX format."""

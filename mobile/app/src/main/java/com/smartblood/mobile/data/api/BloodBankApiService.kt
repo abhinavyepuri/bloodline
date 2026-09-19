@@ -23,6 +23,9 @@ interface BloodBankApiService {
     @POST("donors/me/telemetry")
     suspend fun updateLocation(@Body telemetry: Map<String, Double>): Response<Unit>
 
+    @POST("donors/me/heartbeat")
+    suspend fun sendHeartbeat(@Body coordinates: Map<String, Double>): Response<DonorProfile>
+
     // Active Emergency Requests & Responses
     @GET("donors/requests/active")
     suspend fun getActiveRequests(): Response<List<BloodRequestItem>>

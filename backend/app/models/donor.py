@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, Boolean, Date, ForeignKey, Integer
+from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer
 from sqlalchemy.orm import relationship
 from geoalchemy2 import Geography
 from app.models.base import TimestampedModel
@@ -20,5 +20,6 @@ class Donor(TimestampedModel):
     location = Column(Geography(geometry_type="POINT", srid=4326), nullable=True)
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+    location_updated_at = Column(DateTime(timezone=True), nullable=True)
 
     user = relationship("User", backref="donor_profile")

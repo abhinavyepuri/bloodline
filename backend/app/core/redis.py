@@ -95,16 +95,22 @@ class ConcurrencyLockManager:
 
     # ------------------------------------------------------------ soft lock
     async def register_alerted_donors(
-        self, request_id: str, donor_ids: List[str], ttl_seconds: int = 180
+        self, request_id: str, donor_ids: List[str], ttl_seconds: int = 86400
     ) -> None:
-        """Record which donors were alerted for this request (the soft-lock zone)."""
+        """Record which donors were alerted for this request (the soft-lock zone).
+
+        No expiry is set on the alert zone — donors remain eligible until the
+        request is fulfilled or cancelled. The ttl_seconds parameter is kept for
+        API compatibility but is only used for the timeout trigger key.
+        """
         if not donor_ids:
             return
         key = self._zone_key(request_id)
         pipe = self.redis.pipeline()
         pipe.sadd(key, *donor_ids)
-        pipe.expire(key, ttl_seconds)
-        # Also schedule alert timeout key for reactive keyspace expiry
+        # No expire on the zone itself — donors can accept any time they see the request
+        pipe.persist(key)
+        # Timeout key still used by event sweeper; use the provided TTL (default 24h)
         pipe.set(self._timeout_key(request_id), "active", ex=ttl_seconds)
         await pipe.execute()
 
@@ -137,12 +143,18 @@ class ConcurrencyLockManager:
 
     async def alert_zone_ttl(self, request_id: str) -> Optional[int]:
         """
-        Seconds left on this request's alert zone, or None when the zone has expired.
+        Seconds left on this request's alert zone, or None when the zone key
+        doesn't exist at all (request never registered).
 
-        Redis returns -2 for a missing key and -1 for a key with no expiry; both mean
-        "no countdown to show".
+        Redis -1 means the key exists but has no expiry (persist was called) —
+        that means the zone is open indefinitely, so we return a large sentinel
+        value rather than None so callers never treat it as 'closed'.
+        Redis -2 means the key is completely missing.
         """
         ttl = await self.redis.ttl(self._zone_key(request_id))
+        if ttl == -1:
+            # Key exists, no expiry — alert zone is open indefinitely
+            return 86400
         return ttl if isinstance(ttl, int) and ttl >= 0 else None
 
     # ------------------------------------------------------------ hard lock
@@ -151,7 +163,7 @@ class ConcurrencyLockManager:
         request_id: str,
         donor_id: str,
         max_units: int,
-        ttl_seconds: int = 3600,
+        ttl_seconds: int = 86400,
     ) -> Optional[int]:
         """
         Atomically claim one free unit slot for this donor in a single round-trip Lua script.

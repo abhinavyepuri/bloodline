@@ -53,7 +53,13 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+import sqlalchemy as sa
+
 def do_run_migrations(connection: Connection) -> None:
+    # Ensure alembic_version column accommodates descriptive revision IDs (up to 128 chars)
+    connection.execute(
+        sa.text("ALTER TABLE IF EXISTS alembic_version ALTER COLUMN version_num TYPE VARCHAR(128);")
+    )
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -71,6 +77,7 @@ async def run_async_migrations() -> None:
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
+        await connection.commit()
     await connectable.dispose()
 
 

@@ -5,16 +5,25 @@ import { useAuth, RegisterPayload } from '../context/AuthContext';
 interface SeededAccount {
   label: string;
   email: string;
+  password: string;
   role: string;
+  bloodType?: string;
 }
 
 const PRESET_ACCOUNTS: SeededAccount[] = [
-  { label: 'Hospital Desk (Metro General)', email: 'hospital@smartblood.org', role: 'HOSPITAL' },
-  { label: 'Blood Bank Storage', email: 'bloodbank@smartblood.org', role: 'BLOOD_BANK' },
-  { label: 'Volunteer Donor (Alice - O-)', email: 'alice@donor.org', role: 'DONOR' },
-  { label: 'Volunteer Donor (Bob - O-)', email: 'bob@donor.org', role: 'DONOR' },
-  { label: 'Emergency Operations (Coordinator)', email: 'coordinator@smartblood.org', role: 'COORDINATOR' },
-  { label: 'System Administrator', email: 'admin@smartblood.org', role: 'ADMIN' },
+  { label: 'Hospital – Metro General', email: 'hospital@smartblood.org', password: 'password123', role: 'HOSPITAL' },
+  { label: 'Hospital – St. Jude', email: 'stjude@smartblood.org', password: 'password123', role: 'HOSPITAL' },
+  { label: 'Blood Bank Staff', email: 'bloodbank@smartblood.org', password: 'password123', role: 'BLOOD_BANK' },
+  { label: 'Coordinator', email: 'coordinator@smartblood.org', password: 'password123', role: 'COORDINATOR' },
+  { label: 'System Admin', email: 'admin@smartblood.org', password: 'password123', role: 'ADMIN' },
+  { label: 'Alice Chen', email: 'alice@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O-' },
+  { label: 'Bob Okafor', email: 'bob@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O-' },
+  { label: 'Charlie Nguyen', email: 'charlie@donor.org', password: 'password123', role: 'DONOR', bloodType: 'A+' },
+  { label: 'Diana Patel', email: 'diana@donor.org', password: 'password123', role: 'DONOR', bloodType: 'B-' },
+  { label: 'Evan Torres', email: 'evan@donor.org', password: 'password123', role: 'DONOR', bloodType: 'B+' },
+  { label: 'Fatima Al-Hassan', email: 'fatima@donor.org', password: 'password123', role: 'DONOR', bloodType: 'AB-' },
+  { label: 'George Mensah', email: 'george@donor.org', password: 'password123', role: 'DONOR', bloodType: 'AB+' },
+  { label: 'Helen Kozlov', email: 'helen@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O+' },
 ];
 
 export const LoginScreen: React.FC = () => {
@@ -72,7 +81,7 @@ export const LoginScreen: React.FC = () => {
   const handleSelectPreset = (preset: SeededAccount) => {
     setIsRegistering(false);
     setEmail(preset.email);
-    setPassword('password123');
+    setPassword(preset.password);
     setLocalError(null);
   };
 
@@ -99,7 +108,7 @@ export const LoginScreen: React.FC = () => {
         background: 'var(--color-bg)',
       }}
     >
-      <div style={{ width: '100%', maxWidth: '460px' }}>
+      <div style={{ width: '100%', maxWidth: '560px' }}>
         {/* Brand Header */}
         <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
           <div
@@ -360,7 +369,7 @@ export const LoginScreen: React.FC = () => {
             </button>
           </form>
 
-          {/* Quick Sign-In Persona Drawer for Fast Verification */}
+          {/* Credential Reference Table */}
           <div
             style={{
               marginTop: '1.5rem',
@@ -370,7 +379,7 @@ export const LoginScreen: React.FC = () => {
           >
             <div
               style={{
-                fontSize: '0.75rem',
+                fontSize: '0.72rem',
                 fontWeight: 700,
                 color: 'var(--text-muted)',
                 marginBottom: '0.65rem',
@@ -378,41 +387,80 @@ export const LoginScreen: React.FC = () => {
                 letterSpacing: '0.04em',
               }}
             >
-              Quick Sign-In with Pre-Seeded Personnel:
+              Demo Credentials — click any row to sign in
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem' }}>
-              {PRESET_ACCOUNTS.map((preset) => (
-                <button
-                  key={preset.email}
-                  type="button"
-                  disabled={isLoading}
-                  onClick={() => handleSelectPreset(preset)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.4rem',
-                    padding: '0.45rem 0.65rem',
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                    borderRadius: '6px',
-                    border: '1px solid var(--border-subtle)',
-                    background: 'var(--color-bg)',
-                    color: 'var(--text-main)',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  {preset.role === 'HOSPITAL' && <Building2 size={13} color="var(--crimson-500)" style={{ flexShrink: 0 }} />}
-                  {preset.role === 'BLOOD_BANK' && <Droplet size={13} color="var(--amber-500)" style={{ flexShrink: 0 }} />}
-                  {preset.role === 'DONOR' && <Heart size={13} color="var(--emerald-500)" style={{ flexShrink: 0 }} />}
-                  {preset.role === 'COORDINATOR' && <Activity size={13} color="var(--cyan-400)" style={{ flexShrink: 0 }} />}
-                  {preset.role === 'ADMIN' && <Shield size={13} color="var(--purple-400)" style={{ flexShrink: 0 }} />}
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={preset.label}>
-                    {preset.label}
-                  </span>
-                </button>
-              ))}
+
+            <div style={{ maxHeight: '260px', overflowY: 'auto', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                <thead>
+                  <tr
+                    style={{
+                      background: 'var(--color-bg)',
+                      borderBottom: '1px solid var(--border-subtle)',
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 1,
+                    }}
+                  >
+                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Name / Role</th>
+                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 700, color: 'var(--text-muted)' }}>Email</th>
+                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'center', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Type</th>
+                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 700, color: 'var(--text-muted)' }}>Password</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {PRESET_ACCOUNTS.map((preset, idx) => (
+                    <tr
+                      key={preset.email}
+                      onClick={() => handleSelectPreset(preset)}
+                      style={{
+                        cursor: 'pointer',
+                        borderBottom: idx < PRESET_ACCOUNTS.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                        background: 'var(--color-surface, #fff)',
+                        transition: 'background 0.12s ease',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-bg)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--color-surface, #fff)')}
+                    >
+                      <td style={{ padding: '0.55rem 0.75rem', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          {preset.role === 'HOSPITAL' && <Building2 size={13} color="var(--crimson-500)" style={{ flexShrink: 0 }} />}
+                          {preset.role === 'BLOOD_BANK' && <Droplet size={13} color="var(--amber-500)" style={{ flexShrink: 0 }} />}
+                          {preset.role === 'DONOR' && <Heart size={13} color="var(--emerald-500)" style={{ flexShrink: 0 }} />}
+                          {preset.role === 'COORDINATOR' && <Activity size={13} color="var(--cyan-400)" style={{ flexShrink: 0 }} />}
+                          {preset.role === 'ADMIN' && <Shield size={13} color="var(--purple-400)" style={{ flexShrink: 0 }} />}
+                          <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{preset.label}</span>
+                        </div>
+                      </td>
+                      <td style={{ padding: '0.55rem 0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem' }}>
+                        {preset.email}
+                      </td>
+                      <td style={{ padding: '0.55rem 0.75rem', textAlign: 'center' }}>
+                        {preset.bloodType ? (
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              padding: '0.15rem 0.5rem',
+                              borderRadius: '4px',
+                              fontSize: '0.72rem',
+                              fontWeight: 800,
+                              background: 'rgba(239, 68, 68, 0.12)',
+                              color: 'var(--crimson-500)',
+                            }}
+                          >
+                            {preset.bloodType}
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>—</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '0.55rem 0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', letterSpacing: '0.05em' }}>
+                        {preset.password}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

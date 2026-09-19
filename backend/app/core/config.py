@@ -89,7 +89,8 @@ class Settings(BaseSettings):
     # Clinical Optimization & Proximity Settings
     DEFAULT_GEOFENCE_RADIUS_KM: float = 5.0
     EXPANDED_GEOFENCE_RADIUS_KM: float = 15.0
-    DONOR_RESPONSE_TTL_SECONDS: int = 180  # 3 minutes
+    DONOR_RESPONSE_TTL_SECONDS: int = 86400  # 24 hours — donors can accept any time they see the request
+    DONOR_LOCATION_TTL_MINUTES: int = 60  # Maximum age before location is considered stale
     WHOLE_BLOOD_DONATION_INTERVAL_DAYS: int = 56
     PLATELET_DONATION_INTERVAL_DAYS: int = 14
 

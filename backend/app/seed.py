@@ -65,7 +65,7 @@ async def seed_data():
         user_donor_1 = User(
             email="alice@donor.org",
             hashed_password=hashed_pwd,
-            full_name="Alice Donor (D1)",
+            full_name="Alice Chen",
             phone_number="+1-555-0301",
             role=UserRole.DONOR,
             is_verified=True
@@ -73,7 +73,7 @@ async def seed_data():
         user_donor_2 = User(
             email="bob@donor.org",
             hashed_password=hashed_pwd,
-            full_name="Bob Donor (D2)",
+            full_name="Bob Okafor",
             phone_number="+1-555-0302",
             role=UserRole.DONOR,
             is_verified=True
@@ -81,8 +81,48 @@ async def seed_data():
         user_donor_3 = User(
             email="charlie@donor.org",
             hashed_password=hashed_pwd,
-            full_name="Charlie Donor (D3)",
+            full_name="Charlie Nguyen",
             phone_number="+1-555-0303",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_4 = User(
+            email="diana@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Diana Patel",
+            phone_number="+1-555-0304",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_5 = User(
+            email="evan@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Evan Torres",
+            phone_number="+1-555-0305",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_6 = User(
+            email="fatima@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Fatima Al-Hassan",
+            phone_number="+1-555-0306",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_7 = User(
+            email="george@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="George Mensah",
+            phone_number="+1-555-0307",
+            role=UserRole.DONOR,
+            is_verified=True
+        )
+        user_donor_8 = User(
+            email="helen@donor.org",
+            hashed_password=hashed_pwd,
+            full_name="Helen Kozlov",
+            phone_number="+1-555-0308",
             role=UserRole.DONOR,
             is_verified=True
         )
@@ -108,6 +148,8 @@ async def seed_data():
         db.add_all([
             user_hosp_a, user_hosp_b, user_bb,
             user_donor_1, user_donor_2, user_donor_3,
+            user_donor_4, user_donor_5, user_donor_6,
+            user_donor_7, user_donor_8,
             user_coordinator, user_admin
         ])
         await db.flush()
@@ -210,7 +252,8 @@ async def seed_data():
             total_successful_donations=4,
             latitude=12.9850,
             longitude=77.6050,
-            location=ST_SetSRID(ST_Point(77.6050, 12.9850), 4326)
+            location=ST_SetSRID(ST_Point(77.6050, 12.9850), 4326),
+            location_updated_at=now,
         )
         d2 = Donor(
             user_id=user_donor_2.id,
@@ -223,7 +266,8 @@ async def seed_data():
             total_successful_donations=2,
             latitude=12.9950,
             longitude=77.6150,
-            location=ST_SetSRID(ST_Point(77.6150, 12.9950), 4326)
+            location=ST_SetSRID(ST_Point(77.6150, 12.9950), 4326),
+            location_updated_at=now,
         )
         d3 = Donor(
             user_id=user_donor_3.id,
@@ -236,9 +280,80 @@ async def seed_data():
             total_successful_donations=6,
             latitude=12.9730,
             longitude=77.5920,
-            location=ST_SetSRID(ST_Point(77.5920, 12.9730), 4326)
+            location=ST_SetSRID(ST_Point(77.5920, 12.9730), 4326),
+            location_updated_at=now,
         )
-        db.add_all([d1, d2, d3])
+        d4 = Donor(
+            user_id=user_donor_4.id,
+            blood_group="B-",
+            date_of_birth=date(1990, 7, 8),
+            weight_kg=65.0,
+            last_donation_date=date(2025, 12, 20),
+            is_available=True,
+            reliability_score=0.89,
+            total_successful_donations=3,
+            latitude=12.9680,
+            longitude=77.6100,
+            location=ST_SetSRID(ST_Point(77.6100, 12.9680), 4326),
+            location_updated_at=now,
+        )
+        d5 = Donor(
+            user_id=user_donor_5.id,
+            blood_group="B+",
+            date_of_birth=date(1997, 3, 25),
+            weight_kg=82.0,
+            last_donation_date=date(2026, 3, 10),
+            is_available=True,
+            reliability_score=0.96,
+            total_successful_donations=8,
+            latitude=12.9800,
+            longitude=77.5870,
+            location=ST_SetSRID(ST_Point(77.5870, 12.9800), 4326),
+            location_updated_at=now,
+        )
+        d6 = Donor(
+            user_id=user_donor_6.id,
+            blood_group="AB-",
+            date_of_birth=date(1993, 11, 14),
+            weight_kg=57.0,
+            last_donation_date=date(2026, 1, 5),
+            is_available=True,
+            reliability_score=0.93,
+            total_successful_donations=5,
+            latitude=12.9620,
+            longitude=77.6200,
+            location=ST_SetSRID(ST_Point(77.6200, 12.9620), 4326),
+            location_updated_at=now,
+        )
+        d7 = Donor(
+            user_id=user_donor_7.id,
+            blood_group="AB+",
+            date_of_birth=date(1988, 5, 30),
+            weight_kg=90.0,
+            last_donation_date=date(2025, 10, 18),
+            is_available=True,
+            reliability_score=0.87,
+            total_successful_donations=1,
+            latitude=12.9900,
+            longitude=77.5810,
+            location=ST_SetSRID(ST_Point(77.5810, 12.9900), 4326),
+            location_updated_at=now,
+        )
+        d8 = Donor(
+            user_id=user_donor_8.id,
+            blood_group="O+",
+            date_of_birth=date(2000, 8, 19),
+            weight_kg=68.0,
+            last_donation_date=date(2026, 4, 1),
+            is_available=True,
+            reliability_score=0.97,
+            total_successful_donations=7,
+            latitude=12.9760,
+            longitude=77.6080,
+            location=ST_SetSRID(ST_Point(77.6080, 12.9760), 4326),
+            location_updated_at=now,
+        )
+        db.add_all([d1, d2, d3, d4, d5, d6, d7, d8])
         await db.commit()
 
         print("Synthetic database seeded successfully!")
@@ -247,8 +362,14 @@ async def seed_data():
         print("  Hospital Admin:    hospital@smartblood.org    / password123")
         print("  Hospital Admin 2:  stjude@smartblood.org      / password123")
         print("  Blood Bank Staff:  bloodbank@smartblood.org   / password123")
-        print("  Donor 1 (D1):      alice@donor.org            / password123")
-        print("  Donor 2 (D2):      bob@donor.org              / password123")
+        print("  Donor 1 – Alice   (O-):  alice@donor.org            / password123")
+        print("  Donor 2 – Bob     (O-):  bob@donor.org              / password123")
+        print("  Donor 3 – Charlie (A+):  charlie@donor.org          / password123")
+        print("  Donor 4 – Diana   (B-):  diana@donor.org            / password123")
+        print("  Donor 5 – Evan    (B+):  evan@donor.org             / password123")
+        print("  Donor 6 – Fatima  (AB-): fatima@donor.org           / password123")
+        print("  Donor 7 – George  (AB+): george@donor.org           / password123")
+        print("  Donor 8 – Helen   (O+):  helen@donor.org            / password123")
         print("  Coordinator:       coordinator@smartblood.org / password123")
 
 

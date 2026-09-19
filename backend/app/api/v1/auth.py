@@ -1,3 +1,4 @@
+from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -77,7 +78,8 @@ async def register_user(req: RegisterRequest, db: AsyncSession = Depends(get_db)
             is_available=True,
             latitude=12.9716,
             longitude=77.5946,
-            location=func.ST_SetSRID(func.ST_Point(77.5946, 12.9716), 4326)
+            location=func.ST_SetSRID(func.ST_Point(77.5946, 12.9716), 4326),
+            location_updated_at=datetime.now(timezone.utc),
         )
         db.add(donor)
     elif role_enum == UserRole.BLOOD_BANK:
