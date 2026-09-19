@@ -72,22 +72,6 @@ async def seed_data():
             role=UserRole.BLOOD_BANK,
             is_verified=True
         )
-        user_bb_3 = User(
-            email="stjude.bb@smartblood.org",
-            hashed_password=hashed_pwd,
-            full_name="St. Jude Blood Center Staff",
-            phone_number="+1-555-0203",
-            role=UserRole.BLOOD_BANK,
-            is_verified=True
-        )
-        user_bb_4 = User(
-            email="apex.bloodbank@smartblood.org",
-            hashed_password=hashed_pwd,
-            full_name="Apex Transfusion Logistics Staff",
-            phone_number="+1-555-0204",
-            role=UserRole.BLOOD_BANK,
-            is_verified=True
-        )
         user_donor_1 = User(
             email="alice@donor.org",
             hashed_password=hashed_pwd,
@@ -237,7 +221,7 @@ async def seed_data():
 
         db.add_all([
             user_hosp_a, user_hosp_b,
-            user_bb, user_bb_2, user_bb_3, user_bb_4,
+            user_bb, user_bb_2,
             user_donor_1, user_donor_2, user_donor_3,
             user_donor_4, user_donor_5, user_donor_6,
             user_donor_7, user_donor_8,
@@ -295,28 +279,8 @@ async def seed_data():
             longitude=77.5850,
             location=ST_SetSRID(ST_Point(77.5850, 12.9680), 4326)
         )
-        bb_3 = BloodBank(
-            user_id=user_bb_3.id,
-            name="St. Jude Regional Blood Center",
-            license_number="BB-BLR-003",
-            address="255 North Boulevard, Medical Hub",
-            contact_phone="+1-555-0203",
-            latitude=12.9810,
-            longitude=77.6020,
-            location=ST_SetSRID(ST_Point(77.6020, 12.9810), 4326)
-        )
-        bb_4 = BloodBank(
-            user_id=user_bb_4.id,
-            name="Apex Transfusion & Trauma Logistics",
-            license_number="BB-BLR-004",
-            address="88 Ring Road, South Sector",
-            contact_phone="+1-555-0204",
-            latitude=12.9550,
-            longitude=77.6150,
-            location=ST_SetSRID(ST_Point(77.6150, 12.9550), 4326)
-        )
         bb = bb_1  # Alias for backward-compatibility with downstream tests/seeds
-        db.add_all([bb_1, bb_2, bb_3, bb_4])
+        db.add_all([bb_1, bb_2])
         await db.flush()
 
         # 5. Create Inventory Units across blood banks
@@ -392,49 +356,7 @@ async def seed_data():
             expiry_date=now + timedelta(days=4),
             status=UnitStatus.AVAILABLE
         )
-        # St. Jude BB Inventory
-        unit_8 = InventoryUnit(
-            blood_bank_id=bb_3.id,
-            batch_number="SJ-001",
-            blood_group="B-",
-            component_type=BloodComponentType.PRBC,
-            volume_ml=350.0,
-            collection_date=now - timedelta(days=3),
-            expiry_date=now + timedelta(days=70),
-            status=UnitStatus.AVAILABLE
-        )
-        unit_9 = InventoryUnit(
-            blood_bank_id=bb_3.id,
-            batch_number="SJ-002",
-            blood_group="AB-",
-            component_type=BloodComponentType.FFP,
-            volume_ml=250.0,
-            collection_date=now - timedelta(days=15),
-            expiry_date=now + timedelta(days=300),
-            status=UnitStatus.AVAILABLE
-        )
-        # Apex Logistics Inventory
-        unit_10 = InventoryUnit(
-            blood_bank_id=bb_4.id,
-            batch_number="APX-001",
-            blood_group="AB+",
-            component_type=BloodComponentType.PRBC,
-            volume_ml=350.0,
-            collection_date=now - timedelta(days=2),
-            expiry_date=now + timedelta(days=85),
-            status=UnitStatus.AVAILABLE
-        )
-        unit_11 = InventoryUnit(
-            blood_bank_id=bb_4.id,
-            batch_number="APX-002",
-            blood_group="O+",
-            component_type=BloodComponentType.PLATELETS,
-            volume_ml=250.0,
-            collection_date=now - timedelta(days=1),
-            expiry_date=now + timedelta(days=4),
-            status=UnitStatus.AVAILABLE
-        )
-        db.add_all([unit_1, unit_2, unit_3, unit_4, unit_5, unit_6, unit_7, unit_8, unit_9, unit_10, unit_11])
+        db.add_all([unit_1, unit_2, unit_3, unit_4, unit_5, unit_6, unit_7])
         await db.flush()
 
         # 6. Create Donors (Matching Section 14: D1 at 2.1km, D2 at 3.8km)
@@ -859,8 +781,6 @@ async def seed_data():
         print("  Hospital Admin 2:  stjude@smartblood.org      / password123")
         print("  Blood Bank 1:      bloodbank@smartblood.org   / password123 (Metro Blood Central)")
         print("  Blood Bank 2:      redcross@smartblood.org    / password123 (City Red Cross Blood Bank)")
-        print("  Blood Bank 3:      stjude.bb@smartblood.org   / password123 (St. Jude Regional Blood Center)")
-        print("  Blood Bank 4:      apex.bloodbank@smartblood.org / password123 (Apex Transfusion Logistics)")
         print("  Donor 1  – Alice   (O-):  alice@donor.org            / password123")
         print("  Donor 2  – Bob     (O-):  bob@donor.org              / password123")
         print("  Donor 3  – Charlie (A+):  charlie@donor.org          / password123")
