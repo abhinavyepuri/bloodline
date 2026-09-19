@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, List
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.models.allocation import AllocationSourceType, AllocationStatus
 
@@ -10,6 +10,8 @@ class AllocationOut(BaseModel):
     source_type: AllocationSourceType
     inventory_unit_id: Optional[str] = None
     donor_id: Optional[str] = None
+    batch_number: Optional[str] = None
+    blood_group: Optional[str] = None
     status: AllocationStatus
     estimated_transit_minutes: Optional[float] = None
     distance_km: Optional[float] = None
@@ -59,11 +61,13 @@ class DonorRespondOut(BaseModel):
 
     status: str
     allocation_id: Optional[str] = None
+    allocation_ids: Optional[List[str]] = Field(default_factory=list, description="All allocation record IDs created for this donor response")
     donor_id: Optional[str] = None
     slot: Optional[int] = Field(None, description="Zero-based unit slot this donor claimed")
     bags_claimed: Optional[int] = Field(None, description="Number of units/bags claimed by the donor")
     distance_km: Optional[float] = None
     estimated_transit_minutes: Optional[float] = None
+    bags_committed: Optional[int] = Field(None, description="Number of unit bags this donor committed to donate")
     units_covered: Optional[int] = Field(None, description="Units secured for the request so far")
     units_requested: Optional[int] = None
     shortfall: Optional[int] = Field(None, description="Units still outstanding")

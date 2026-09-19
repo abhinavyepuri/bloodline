@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { api } from '../lib/api';
 import { BloodRequest, BloodComponentType, TriageLevel, AllocationAuditLog } from '../types';
-import { AlertCircle, Clock, CheckCircle2, RefreshCw, Send, Info, Truck, ShieldAlert, X } from 'lucide-react';
+import { AlertCircle, Clock, CheckCircle2, RefreshCw, Send, Info, Truck, ShieldAlert, X, Droplet, Package } from 'lucide-react';
 
 const COMPONENT_LABELS: Record<BloodComponentType, string> = {
   PRBC: 'Red Blood Cells',
@@ -69,9 +69,9 @@ export const HospitalDashboard: React.FC = () => {
   useEffect(() => {
     if (!lastEvent) return;
 
-    if (lastEvent.type === 'DONOR_APPROACHING_WARD' || lastEvent.type === 'COURIER_APPROACHING_WARD') {
+    if (lastEvent.type === 'DONOR_APPROACHING_WARD' || lastEvent.type === 'COURIER_APPROACHING_WARD' || lastEvent.type === 'BLOOD_BANK_DISPATCHED') {
       setWardAlert({
-        message: lastEvent.message || 'Inbound blood donor / courier has entered the 500m emergency ward geofence. Pre-warm blood thawers and prepare patient transfusion line!',
+        message: lastEvent.message || 'Inbound blood bags / courier has entered transit or is approaching ward. Pre-warm blood thawers and prepare patient transfusion line!',
         timestamp: new Date().toLocaleTimeString(),
       });
     }
@@ -82,6 +82,7 @@ export const HospitalDashboard: React.FC = () => {
         'REQUEST_UPDATED',
         'INVENTORY_LOCKED',
         'DONOR_CLAIM_SUCCESS',
+        'BLOOD_BANK_ACCEPTED',
         'BLOOD_BANK_DISPATCHED',
         'DONOR_APPROACHING_WARD',
         'RE_PLANNING_TRIGGERED',
@@ -123,12 +124,11 @@ export const HospitalDashboard: React.FC = () => {
     }
   };
 
-  const handleFulfill = async (id: string) => {
+  const handleFulfill = async (id: string, allowPartial: boolean = false) => {
     try {
-      await api.post(`/requests/${id}/fulfill`);
+      await api.post(`/requests/${id}/fulfill${allowPartial ? '?allow_partial=true' : ''}`);
       await fetchRequests();
     } catch (err) {
-      // The server refuses to confirm receipt while bags are still outstanding.
       setError(err instanceof Error ? err.message : 'Could not confirm receipt.');
     }
   };

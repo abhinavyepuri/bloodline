@@ -36,6 +36,8 @@ interface HospitalOrder {
   required_blood_group: string;
   component_type: string;
   units_requested: number;
+  units_covered?: number;
+  units_shortfall?: number;
   triage_level: string;
   calculated_urgency_score: number;
   status: string;
@@ -47,6 +49,20 @@ interface HospitalOrder {
     unit_status: string;
     allocation_status: string;
     allocation_id: string;
+  }[];
+  volunteer_donors?: {
+    donor_id: string;
+    blood_group: string;
+    allocation_status: string;
+    allocation_id: string;
+    distance_km?: number;
+    estimated_transit_minutes?: number;
+  }[];
+  available_compatible_units?: {
+    unit_id: string;
+    batch_number: string;
+    blood_group: string;
+    expiry_date: string;
   }[];
 }
 
@@ -78,6 +94,7 @@ export const BloodBankDashboard: React.FC = () => {
   const [forecastSummary, setForecastSummary] = useState<PredictionSummary | null>(null);
   const [componentFilter, setComponentFilter] = useState<string>('PRBC');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [modalTab, setModalTab] = useState<'BATCH_GENERATOR' | 'MULTI_ROW' | 'SINGLE'>('BATCH_GENERATOR');
   const [submitting, setSubmitting] = useState(false);
@@ -132,6 +149,7 @@ export const BloodBankDashboard: React.FC = () => {
       setForecastSummary(summaryData);
     } catch (err) {
       console.error('Failed to fetch inventory or orders:', err);
+      setError(err instanceof Error ? err.message : 'Could not load blood-bank data.');
     } finally {
       setLoading(false);
     }
@@ -139,6 +157,11 @@ export const BloodBankDashboard: React.FC = () => {
 
   useEffect(() => {
     fetchInventoryAndOrders();
+    // Automated polling every 3 seconds ensures requests appear in real time on the desk
+    const interval = setInterval(() => {
+      fetchInventoryAndOrders();
+    }, 3000);
+    return () => clearInterval(interval);
   }, [fetchInventoryAndOrders]);
 
   useEffect(() => {
@@ -151,7 +174,12 @@ export const BloodBankDashboard: React.FC = () => {
         'INVENTORY_UNIT_ADDED',
         'INVENTORY_UNIT_STATUS_CHANGED',
         'INVENTORY_LOCKED',
+        'BLOOD_BANK_ACCEPTED',
         'BLOOD_BANK_DISPATCHED',
+        'ALLOCATION_CONFIRMED',
+        'ALLOCATION_COMPLETED',
+        'REQUEST_FULFILLED',
+        'REQUEST_CANCELLED',
         'RE_PLANNING_TRIGGERED',
         'SYSTEM_RESET',
       ].includes(lastEvent.type)
@@ -165,7 +193,20 @@ export const BloodBankDashboard: React.FC = () => {
       await api.patch(`/inventory/units/${unitId}/status`, { status: newStatus });
       await fetchInventoryAndOrders();
     } catch (err) {
-      alert('Error changing unit status: ' + (err instanceof Error ? err.message : err));
+      setError('Error changing unit status: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleAcceptOrder = async (requestId: string, autoDispatch: boolean = false) => {
+    setAcceptingId(requestId);
+    setError(null);
+    try {
+      await api.post(`/inventory/orders/${requestId}/accept`, { auto_dispatch: autoDispatch });
+      await fetchInventoryAndOrders();
+    } catch (err) {
+      setError('Error accepting order: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setAcceptingId(null);
     }
   };
 
@@ -175,7 +216,7 @@ export const BloodBankDashboard: React.FC = () => {
       await api.post(`/inventory/orders/${requestId}/dispatch`);
       await fetchInventoryAndOrders();
     } catch (err) {
-      alert('Error dispatching blood: ' + (err instanceof Error ? err.message : err));
+      setError('Error dispatching blood: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setDispatchingId(null);
     }
@@ -187,15 +228,20 @@ export const BloodBankDashboard: React.FC = () => {
     setSubmitting(true);
     const now = new Date();
     const expiry = new Date(Date.now() + newExpiryDays * 24 * 3600 * 1000);
+    const count = Math.max(1, Math.min(100, Number(newPacketsCount) || 1));
+    const baseBatch = newBatch.trim() || `BB-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    setRegistering(true);
+    setError(null);
     try {
       await api.post('/inventory/units', {
-        batch_number: newBatch || `BB-${Math.floor(1000 + Math.random() * 9000)}`,
+        batch_number: baseBatch,
         blood_group: newBloodGroup,
         component_type: newComponent,
         volume_ml: newVolume,
         collection_date: now.toISOString(),
         expiry_date: expiry.toISOString(),
+        quantity: count,
       });
       setShowAddModal(false);
       setNewBatch('');
@@ -353,6 +399,149 @@ export const BloodBankDashboard: React.FC = () => {
     };
   });
 
+  const isOrderExpanded = (requestId: string) => {
+    if (requestId in expandedOrders) {
+      return expandedOrders[requestId];
+    }
+    // Default open so all order details, allocations, and dispatch options are readily visible
+    return true;
+  };
+
+  const handleToggleExpand = (requestId: string) => {
+    const current = isOrderExpanded(requestId);
+    setExpandedOrders((prev) => ({
+      ...prev,
+      [requestId]: !current,
+    }));
+  };
+
+  const handleToggleExpandAll = () => {
+    const anyCollapsed = orders.some((o) => !isOrderExpanded(o.request_id));
+    const nextState: Record<string, boolean> = {};
+    orders.forEach((o) => {
+      nextState[o.request_id] = anyCollapsed;
+    });
+    setExpandedOrders(nextState);
+  };
+
+  const handleDeskSort = (key: DeskSortKey) => {
+    if (deskSortKey === key) {
+      setDeskSortAsc(!deskSortAsc);
+    } else {
+      setDeskSortKey(key);
+      setDeskSortAsc(['hospital', 'blood_group', 'status'].includes(key));
+    }
+  };
+
+  const handleInvSort = (key: InvSortKey) => {
+    if (invSortKey === key) {
+      setInvSortAsc(!invSortAsc);
+    } else {
+      setInvSortKey(key);
+      setInvSortAsc(true);
+    }
+  };
+
+  const actionRequiredCount = orders.filter((order) => {
+    const hasReserved = order.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE');
+    const hasCompatible = (order.available_compatible_units?.length ?? 0) > 0;
+    const shortfall = order.units_shortfall ?? Math.max(0, order.units_requested - (order.units_covered ?? order.allocated_units.length));
+    return hasReserved || (hasCompatible && shortfall > 0);
+  }).length;
+
+  const dispatchedCount = orders.filter((order) => {
+    return (
+      order.allocated_units.length > 0 &&
+      order.allocated_units.every((u) => u.unit_status === 'DISPATCHED')
+    );
+  }).length;
+
+  const filteredAndSortedOrders = [...orders]
+    .filter((order) => {
+      const hasReserved = order.allocated_units.some((u) => u.unit_status === 'LOCKED_RESERVE');
+      const hasCompatible = (order.available_compatible_units?.length ?? 0) > 0;
+      const shortfall = order.units_shortfall ?? Math.max(0, order.units_requested - (order.units_covered ?? order.allocated_units.length));
+      const allDispatched =
+        order.allocated_units.length > 0 &&
+        order.allocated_units.every((u) => u.unit_status === 'DISPATCHED');
+
+      if (deskFilter === 'ACTION_REQUIRED') {
+        if (!hasReserved && !(hasCompatible && shortfall > 0)) return false;
+      } else if (deskFilter === 'DISPATCHED') {
+        if (!allDispatched) return false;
+      }
+
+      if (deskSearch.trim()) {
+        const q = deskSearch.toLowerCase();
+        const matchesHospital = order.hospital_name?.toLowerCase().includes(q);
+        const matchesGroup = order.required_blood_group?.toLowerCase().includes(q);
+        const matchesToken = order.patient_id_token?.toLowerCase().includes(q);
+        const matchesStatus = order.status?.toLowerCase().includes(q);
+        if (!matchesHospital && !matchesGroup && !matchesToken && !matchesStatus) {
+          return false;
+        }
+      }
+
+      return true;
+    })
+    .sort((a, b) => {
+      let comparison = 0;
+      switch (deskSortKey) {
+        case 'urgency':
+          comparison = a.calculated_urgency_score - b.calculated_urgency_score;
+          break;
+        case 'hospital':
+          comparison = a.hospital_name.localeCompare(b.hospital_name);
+          break;
+        case 'blood_group':
+          comparison = a.required_blood_group.localeCompare(b.required_blood_group);
+          break;
+        case 'units':
+          comparison = a.units_requested - b.units_requested;
+          break;
+        case 'shortfall': {
+          const sfA = a.units_shortfall ?? Math.max(0, a.units_requested - (a.units_covered ?? a.allocated_units.length));
+          const sfB = b.units_shortfall ?? Math.max(0, b.units_requested - (b.units_covered ?? b.allocated_units.length));
+          comparison = sfA - sfB;
+          break;
+        }
+        case 'status':
+          comparison = a.status.localeCompare(b.status);
+          break;
+        case 'created_at':
+          comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+          break;
+      }
+      return deskSortAsc ? comparison : -comparison;
+    });
+
+  const allOrdersExpanded = orders.length > 0 && orders.every((o) => isOrderExpanded(o.request_id));
+
+  const sortedUnits = [...units].sort((a, b) => {
+    let cmp = 0;
+    switch (invSortKey) {
+      case 'batch':
+        cmp = a.batch_number.localeCompare(b.batch_number);
+        break;
+      case 'group':
+        cmp = a.blood_group.localeCompare(b.blood_group);
+        break;
+      case 'type':
+        cmp = a.component_type.localeCompare(b.component_type);
+        break;
+      case 'volume':
+        cmp = a.volume_ml - b.volume_ml;
+        break;
+      case 'expiry':
+        cmp = new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime();
+        break;
+      case 'status':
+        cmp = a.status.localeCompare(b.status);
+        break;
+    }
+    return invSortAsc ? cmp : -cmp;
+  });
+
   return (
     <div>
       {/* Toast / Status Alert Banner */}
@@ -413,6 +602,33 @@ export const BloodBankDashboard: React.FC = () => {
         </div>
       </div>
 
+      {error && (
+        <div
+          style={{
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid var(--crimson-500)',
+            padding: '0.75rem 1rem',
+            borderRadius: '8px',
+            marginBottom: '1rem',
+            color: 'var(--crimson-500)',
+            fontSize: '0.85rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '0.75rem',
+          }}
+        >
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Top Stat Row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="glass-panel">
@@ -465,20 +681,93 @@ export const BloodBankDashboard: React.FC = () => {
       </div>
 
       {/* SECTION: Incoming Hospital Blood Orders */}
+      {/* SECTION: Incoming Hospital Blood Orders Desk */}
       <div className="glass-panel highlight-cyan" style={{ marginBottom: '1.75rem', border: '1px solid rgba(6, 182, 212, 0.4)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Building2 size={22} color="var(--cyan-400)" />
             <h2 style={{ fontSize: '1.2rem', fontWeight: 800 }}>
-              Incoming Hospital Blood Orders
+              Incoming Hospital Blood Orders Desk
             </h2>
             <span className="badge badge-cyan">{orders.length} Active Orders</span>
           </div>
 
-          <button onClick={fetchInventoryAndOrders} className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
-            <RefreshCw size={14} className={loading ? 'spin' : ''} />
-            Refresh
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            {orders.length > 0 && (
+              <button
+                type="button"
+                onClick={handleToggleExpandAll}
+                className="btn btn-secondary"
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+              >
+                {allOrdersExpanded ? 'Collapse All' : 'Expand All'}
+              </button>
+            )}
+            <button onClick={fetchInventoryAndOrders} className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
+              <RefreshCw size={14} className={loading ? 'spin' : ''} />
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Filter bar & Search */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setDeskFilter('ALL')}
+              className={`badge ${deskFilter === 'ALL' ? 'badge-cyan' : ''}`}
+              style={{
+                background: deskFilter === 'ALL' ? 'var(--cyan-600, #0891b2)' : 'var(--color-surface)',
+                color: '#fff',
+                cursor: 'pointer',
+                border: '1px solid var(--border-subtle)',
+                padding: '0.35rem 0.75rem',
+                fontSize: '0.78rem'
+              }}
+            >
+              All Orders ({orders.length})
+            </button>
+            <button
+              onClick={() => setDeskFilter('ACTION_REQUIRED')}
+              className={`badge ${deskFilter === 'ACTION_REQUIRED' ? 'badge-amber' : ''}`}
+              style={{
+                background: deskFilter === 'ACTION_REQUIRED' ? 'var(--amber-500, #f59e0b)' : 'var(--color-surface)',
+                color: deskFilter === 'ACTION_REQUIRED' ? '#000' : 'var(--text-muted)',
+                cursor: 'pointer',
+                border: '1px solid var(--border-subtle)',
+                padding: '0.35rem 0.75rem',
+                fontSize: '0.78rem'
+              }}
+            >
+              Action Required ({actionRequiredCount})
+            </button>
+            <button
+              onClick={() => setDeskFilter('DISPATCHED')}
+              className={`badge ${deskFilter === 'DISPATCHED' ? 'badge-green' : ''}`}
+              style={{
+                background: deskFilter === 'DISPATCHED' ? 'var(--emerald-600, #059669)' : 'var(--color-surface)',
+                color: '#fff',
+                cursor: 'pointer',
+                border: '1px solid var(--border-subtle)',
+                padding: '0.35rem 0.75rem',
+                fontSize: '0.78rem'
+              }}
+            >
+              Dispatched ({dispatchedCount})
+            </button>
+          </div>
+
+          <div style={{ position: 'relative', minWidth: '240px' }}>
+            <Search size={14} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
+            <input
+              type="text"
+              placeholder="Filter hospital, token, blood group..."
+              value={deskSearch}
+              onChange={(e) => setDeskSearch(e.target.value)}
+              className="input-field"
+              style={{ paddingLeft: '2rem', paddingRight: '0.75rem', paddingTop: '0.35rem', paddingBottom: '0.35rem', fontSize: '0.8rem', width: '100%' }}
+            />
+          </div>
         </div>
 
         {orders.length === 0 ? (
@@ -488,6 +777,10 @@ export const BloodBankDashboard: React.FC = () => {
             <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
               When a partner hospital places an emergency blood request, cold-chain matching automatically reserves matching units and routes the order here in real time.
             </p>
+          </div>
+        ) : filteredAndSortedOrders.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', background: 'var(--color-bg)', borderRadius: '8px' }}>
+            <p>No orders match the current filter or search criteria.</p>
           </div>
         ) : (
           (() => {

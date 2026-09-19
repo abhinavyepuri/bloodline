@@ -14,16 +14,27 @@ const PRESET_ACCOUNTS: SeededAccount[] = [
   { label: 'Hospital – Metro General', email: 'hospital@smartblood.org', password: 'password123', role: 'HOSPITAL' },
   { label: 'Hospital – St. Jude', email: 'stjude@smartblood.org', password: 'password123', role: 'HOSPITAL' },
   { label: 'Blood Bank Staff', email: 'bloodbank@smartblood.org', password: 'password123', role: 'BLOOD_BANK' },
-  { label: 'Coordinator', email: 'coordinator@smartblood.org', password: 'password123', role: 'COORDINATOR' },
   { label: 'System Admin', email: 'admin@smartblood.org', password: 'password123', role: 'ADMIN' },
+  // Universal donors and emergency O types
   { label: 'Alice Chen', email: 'alice@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O-' },
+  { label: 'Jessica Taylor', email: 'jessica@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O-' },
   { label: 'Bob Okafor', email: 'bob@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O-' },
+  { label: 'Helen Kozlov', email: 'helen@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O+' },
+  { label: 'Noah Kim', email: 'noah@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O+' },
+  // A types
+  { label: 'Ian Wright', email: 'ian@donor.org', password: 'password123', role: 'DONOR', bloodType: 'A-' },
+  { label: 'Kiran Patel', email: 'kiran@donor.org', password: 'password123', role: 'DONOR', bloodType: 'A-' },
   { label: 'Charlie Nguyen', email: 'charlie@donor.org', password: 'password123', role: 'DONOR', bloodType: 'A+' },
+  { label: 'Samuel Green', email: 'samuel@donor.org', password: 'password123', role: 'DONOR', bloodType: 'A+' },
+  // B types
   { label: 'Diana Patel', email: 'diana@donor.org', password: 'password123', role: 'DONOR', bloodType: 'B-' },
+  { label: 'Priya Nair', email: 'priya@donor.org', password: 'password123', role: 'DONOR', bloodType: 'B-' },
   { label: 'Evan Torres', email: 'evan@donor.org', password: 'password123', role: 'DONOR', bloodType: 'B+' },
+  { label: 'Liam O’Connor', email: 'liam@donor.org', password: 'password123', role: 'DONOR', bloodType: 'B+' },
+  // AB types
   { label: 'Fatima Al-Hassan', email: 'fatima@donor.org', password: 'password123', role: 'DONOR', bloodType: 'AB-' },
   { label: 'George Mensah', email: 'george@donor.org', password: 'password123', role: 'DONOR', bloodType: 'AB+' },
-  { label: 'Helen Kozlov', email: 'helen@donor.org', password: 'password123', role: 'DONOR', bloodType: 'O+' },
+  { label: 'Maya Sharma', email: 'maya@donor.org', password: 'password123', role: 'DONOR', bloodType: 'AB+' },
 ];
 
 export const LoginScreen: React.FC = () => {
@@ -40,6 +51,7 @@ export const LoginScreen: React.FC = () => {
   const [regBloodGroup, setRegBloodGroup] = useState('O-');
   const [facilityAddress, setFacilityAddress] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [credFilter, setCredFilter] = useState<string>('ALL');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,11 +90,16 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
-  const handleSelectPreset = (preset: SeededAccount) => {
+  const handleSelectPreset = async (preset: SeededAccount) => {
     setIsRegistering(false);
     setEmail(preset.email);
     setPassword(preset.password);
     setLocalError(null);
+    try {
+      await login(preset.email, preset.password);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Sign-in failed.');
+    }
   };
 
   const inputStyle: React.CSSProperties = {
@@ -370,6 +387,7 @@ export const LoginScreen: React.FC = () => {
           </form>
 
           {/* Credential Reference Table */}
+          {/* Credential Reference Table */}
           <div
             style={{
               marginTop: '1.5rem',
@@ -379,18 +397,52 @@ export const LoginScreen: React.FC = () => {
           >
             <div
               style={{
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                color: 'var(--text-muted)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
                 marginBottom: '0.65rem',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
+                flexWrap: 'wrap',
+                gap: '0.4rem',
               }}
             >
-              Demo Credentials — click any row to sign in
+              <div
+                style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  color: 'var(--text-muted)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                Demo Credentials — click any row to sign in
+              </div>
+
+              {/* Blood group and role filter chips */}
+              <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                {['ALL', 'FACILITY', 'O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((flt) => (
+                  <button
+                    key={flt}
+                    type="button"
+                    onClick={() => setCredFilter(flt)}
+                    style={{
+                      padding: '0.15rem 0.45rem',
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      border: '1px solid var(--border-subtle)',
+                      background: credFilter === flt ? 'var(--color-primary, #e11d48)' : 'var(--color-bg)',
+                      color: credFilter === flt ? '#fff' : 'var(--text-muted)',
+                      transition: 'all 0.12s ease',
+                    }}
+                  >
+                    {flt === 'ALL' ? 'All' : flt === 'FACILITY' ? 'Admin & Hospital' : flt}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div style={{ maxHeight: '260px', overflowY: 'auto', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ maxHeight: '270px', overflowY: 'auto', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                 <thead>
                   <tr
@@ -404,61 +456,85 @@ export const LoginScreen: React.FC = () => {
                   >
                     <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Name / Role</th>
                     <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 700, color: 'var(--text-muted)' }}>Email</th>
-                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'center', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Type</th>
+                    <th style={{ padding: '0.5rem 0.75rem', textAlign: 'center', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Blood Group</th>
                     <th style={{ padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 700, color: 'var(--text-muted)' }}>Password</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {PRESET_ACCOUNTS.map((preset, idx) => (
-                    <tr
-                      key={preset.email}
-                      onClick={() => handleSelectPreset(preset)}
-                      style={{
-                        cursor: 'pointer',
-                        borderBottom: idx < PRESET_ACCOUNTS.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                        background: 'var(--color-surface, #fff)',
-                        transition: 'background 0.12s ease',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-bg)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--color-surface, #fff)')}
-                    >
-                      <td style={{ padding: '0.55rem 0.75rem', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          {preset.role === 'HOSPITAL' && <Building2 size={13} color="var(--crimson-500)" style={{ flexShrink: 0 }} />}
-                          {preset.role === 'BLOOD_BANK' && <Droplet size={13} color="var(--amber-500)" style={{ flexShrink: 0 }} />}
-                          {preset.role === 'DONOR' && <Heart size={13} color="var(--emerald-500)" style={{ flexShrink: 0 }} />}
-                          {preset.role === 'COORDINATOR' && <Activity size={13} color="var(--cyan-400)" style={{ flexShrink: 0 }} />}
-                          {preset.role === 'ADMIN' && <Shield size={13} color="var(--purple-400)" style={{ flexShrink: 0 }} />}
-                          <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{preset.label}</span>
-                        </div>
-                      </td>
-                      <td style={{ padding: '0.55rem 0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem' }}>
-                        {preset.email}
-                      </td>
-                      <td style={{ padding: '0.55rem 0.75rem', textAlign: 'center' }}>
-                        {preset.bloodType ? (
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              padding: '0.15rem 0.5rem',
-                              borderRadius: '4px',
-                              fontSize: '0.72rem',
-                              fontWeight: 800,
-                              background: 'rgba(239, 68, 68, 0.12)',
-                              color: 'var(--crimson-500)',
-                            }}
-                          >
-                            {preset.bloodType}
-                          </span>
-                        ) : (
-                          <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>—</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '0.55rem 0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', letterSpacing: '0.05em' }}>
-                        {preset.password}
-                      </td>
-                    </tr>
-                  ))}
+                  {PRESET_ACCOUNTS
+                    .filter((preset) => {
+                      if (credFilter === 'ALL') return true;
+                      if (credFilter === 'FACILITY') return preset.role !== 'DONOR';
+                      return preset.bloodType === credFilter;
+                    })
+                    .map((preset, idx, arr) => {
+                      const bg = preset.bloodType;
+                      let badgeStyle = {
+                        bg: 'rgba(239, 68, 68, 0.14)',
+                        color: 'var(--crimson-500)',
+                        border: 'rgba(239, 68, 68, 0.35)',
+                      };
+                      if (bg?.startsWith('A') && !bg?.startsWith('AB')) {
+                        badgeStyle = { bg: 'rgba(245, 158, 11, 0.14)', color: 'var(--amber-500)', border: 'rgba(245, 158, 11, 0.35)' };
+                      } else if (bg?.startsWith('B')) {
+                        badgeStyle = { bg: 'rgba(6, 182, 212, 0.14)', color: 'var(--cyan-400)', border: 'rgba(6, 182, 212, 0.35)' };
+                      } else if (bg?.startsWith('AB')) {
+                        badgeStyle = { bg: 'rgba(168, 85, 247, 0.14)', color: '#c084fc', border: 'rgba(168, 85, 247, 0.35)' };
+                      }
+
+                      return (
+                        <tr
+                          key={preset.email}
+                          onClick={() => {
+                            if (!isLoading) void handleSelectPreset(preset);
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            borderBottom: idx < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                            background: 'var(--color-surface, #fff)',
+                            transition: 'background 0.12s ease',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-bg)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--color-surface, #fff)')}
+                        >
+                          <td style={{ padding: '0.55rem 0.75rem', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              {preset.role === 'HOSPITAL' && <Building2 size={13} color="var(--crimson-500)" style={{ flexShrink: 0 }} />}
+                              {preset.role === 'BLOOD_BANK' && <Droplet size={13} color="var(--amber-500)" style={{ flexShrink: 0 }} />}
+                              {preset.role === 'DONOR' && <Heart size={13} color="var(--emerald-500)" style={{ flexShrink: 0 }} />}
+                              {preset.role === 'ADMIN' && <Shield size={13} color="var(--purple-400)" style={{ flexShrink: 0 }} />}
+                              <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{preset.label}</span>
+                            </div>
+                          </td>
+                          <td style={{ padding: '0.55rem 0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem' }}>
+                            {preset.email}
+                          </td>
+                          <td style={{ padding: '0.55rem 0.75rem', textAlign: 'center' }}>
+                            {preset.bloodType ? (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  padding: '0.15rem 0.5rem',
+                                  borderRadius: '4px',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 800,
+                                  background: badgeStyle.bg,
+                                  color: badgeStyle.color,
+                                  border: `1px solid ${badgeStyle.border}`,
+                                }}
+                              >
+                                {preset.bloodType}
+                              </span>
+                            ) : (
+                              <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.55rem 0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', letterSpacing: '0.05em' }}>
+                            {preset.password}
+                          </td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>

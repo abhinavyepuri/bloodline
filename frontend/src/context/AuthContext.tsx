@@ -104,6 +104,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           full_name: payload.full_name.trim(),
           phone_number: payload.phone_number.trim(),
           role: payload.role,
+          blood_group: payload.blood_group,
+          facility_address: payload.facility_address,
         });
         // Log in immediately after successful registration
         await login(payload.email.trim().toLowerCase(), payload.password);

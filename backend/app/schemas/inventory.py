@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Optional, Any, List
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.models.inventory import BloodComponentType, UnitStatus
 
@@ -24,6 +24,12 @@ class InventoryUnitCreate(BaseModel):
             "Owning blood bank. Required for coordinator/admin callers; ignored for "
             "blood bank accounts, whose own bank always owns the stock they register."
         ),
+    )
+    quantity: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Number of blood packets/units to log into inventory stock (default: 1)",
     )
 
     model_config = ConfigDict(
@@ -182,6 +188,7 @@ class InventoryUnitOut(BaseModel):
     collection_date: datetime
     expiry_date: datetime
     status: UnitStatus
+    lock_expires_at: Optional[datetime] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

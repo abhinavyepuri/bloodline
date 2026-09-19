@@ -47,7 +47,10 @@ export interface User {
   full_name: string;
   phone_number: string;
   role: UserRole;
+  is_active?: boolean;
   is_verified: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface Allocation {
@@ -56,6 +59,8 @@ export interface Allocation {
   source_type: AllocationSourceType;
   inventory_unit_id?: string;
   donor_id?: string;
+  batch_number?: string;
+  blood_group?: string;
   status: AllocationStatus;
   estimated_transit_minutes?: number;
   distance_km?: number;
@@ -66,6 +71,7 @@ export interface Allocation {
 
 export interface BloodRequest {
   id: string;
+  code?: string;
   hospital_id: string;
   hospital_name?: string;
   hospital_address?: string;
@@ -103,6 +109,33 @@ export interface InventoryUnit {
   created_at: string;
 }
 
+export type HealthEligibilityStatus = 'ELIGIBLE' | 'TEMPORARILY_DEFERRED' | 'PERMANENTLY_DEFERRED';
+
+export interface DonorHealthReport {
+  id: string;
+  donor_id: string;
+  report_code: string;
+  hemoglobin_g_dl: number;
+  systolic_bp: number;
+  diastolic_bp: number;
+  pulse_bpm: number;
+  temperature_c: number;
+  weight_kg: number;
+  blood_glucose_mg_dl?: number;
+  hiv_status: string;
+  hepb_status: string;
+  hepc_status: string;
+  syphilis_status: string;
+  malaria_status: string;
+  eligibility_status: HealthEligibilityStatus;
+  deferral_reason?: string;
+  deferral_end_date?: string;
+  doctor_name?: string;
+  facility_name?: string;
+  doctor_remarks?: string;
+  created_at: string;
+}
+
 export interface Donor {
   id: string;
   user_id: string;
@@ -115,6 +148,8 @@ export interface Donor {
   total_successful_donations: number;
   latitude?: number;
   longitude?: number;
+  location_updated_at?: string;
+  latest_health_report?: DonorHealthReport;
   created_at: string;
 }
 
@@ -140,14 +175,34 @@ export interface HospitalDirectoryEntry {
   longitude: number;
 }
 
+/** Response body for POST /donors/me/telemetry. */
+export interface DonorTelemetry {
+  donor_id: string;
+  latitude: number;
+  longitude: number;
+  active_allocation_id?: string;
+  hospital_id?: string;
+  hospital_name?: string;
+  distance_to_hospital_km?: number;
+  estimated_eta_minutes?: number;
+  is_approaching_ward?: boolean;
+  message?: string;
+  /** Compatibility aliases also emitted by the API. */
+  distance_km?: number;
+  estimated_transit_minutes?: number;
+  geofence_triggered?: boolean;
+}
+
 /** Response body for a donor accepting or declining an alert. */
 export interface DonorRespondResult {
   status: string;
   allocation_id?: string;
+  allocation_ids?: string[];
   donor_id?: string;
   slot?: number;
   distance_km?: number;
   estimated_transit_minutes?: number;
+  bags_committed?: number;
   units_covered?: number;
   units_requested?: number;
   shortfall?: number;
@@ -173,6 +228,14 @@ export interface AllocationAuditLog {
 export interface WebSocketEvent {
   type: string;
   [key: string]: any;
+}
+
+export interface AdminOverview {
+  active_requests_count: number;
+  available_inventory_units_count: number;
+  active_donors_count: number;
+  recent_allocations_count: number;
+  system_status: string;
 }
 
 export interface AdminMetrics {

@@ -16,6 +16,42 @@ export interface RequestOptions extends RequestInit {
   token?: string | null;
 }
 
+function formatApiDetail(detail: unknown): string {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const rec = item as Record<string, unknown>;
+          const loc = Array.isArray(rec.loc) ? rec.loc.filter((p) => p !== 'body').join('.') : rec.field;
+          const msg = rec.msg || rec.message;
+          if (msg && loc) return `${loc}: ${msg}`;
+          if (typeof msg === 'string') return msg;
+        }
+        return JSON.stringify(item);
+      })
+      .filter(Boolean)
+      .join('; ');
+  }
+  if (detail && typeof detail === 'object') {
+    return JSON.stringify(detail);
+  }
+  return '';
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  try {
+    const errorJson = await response.json();
+    const fromDetail = formatApiDetail(errorJson.detail);
+    if (fromDetail) return fromDetail;
+    if (typeof errorJson.message === 'string' && errorJson.message) return errorJson.message;
+    return JSON.stringify(errorJson);
+  } catch {
+    return response.statusText || `Request failed with status ${response.status}`;
+  }
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   let url = path.startsWith('http://') || path.startsWith('https://')
     ? path
@@ -34,18 +70,22 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     }
   }
 
+  const method = (options.method || 'GET').toUpperCase();
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
+  if (method !== 'GET' && method !== 'HEAD' && !headers['Content-Type'] && !headers['content-type']) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   const authToken = options.token !== undefined ? options.token : currentToken;
   if (authToken && !headers['Authorization']) {
     headers['Authorization'] = `Bearer ${authToken}`;
   }
 
+  const { params: _params, token: _token, headers: _headers, ...fetchOptions } = options;
   const response = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
@@ -56,14 +96,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   if (!response.ok) {
-    let errorDetail = response.statusText;
-    try {
-      const errorJson = await response.json();
-      errorDetail = errorJson.detail || errorJson.message || JSON.stringify(errorJson);
-    } catch {
-      // Ignore if response body is not JSON
-    }
-    throw new Error(errorDetail || `Request failed with status ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
 
   if (response.status === 204) {
@@ -130,14 +163,7 @@ export async function loginRequest<T = any>(
   });
 
   if (!response.ok) {
-    let errorDetail = response.statusText;
-    try {
-      const errorJson = await response.json();
-      errorDetail = errorJson.detail || errorJson.message || JSON.stringify(errorJson);
-    } catch {
-      // Ignore
-    }
-    throw new Error(errorDetail || 'Login failed');
+    throw new Error(await readErrorMessage(response));
   }
 
   return (await response.json()) as T;

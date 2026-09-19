@@ -42,6 +42,18 @@ function toastFor(event: WebSocketEvent): WebSocketContextType['toastMessage'] {
         text: event.message || 'Blood unit secured and on the way to the hospital.',
         type: 'success',
       };
+    case 'BLOOD_BANK_DISPATCHED':
+      return {
+        title: '🚑 BLOOD DISPATCHED',
+        text: event.message || 'Blood bank packed and dispatched blood units to the ambulance!',
+        type: 'success',
+      };
+    case 'BLOOD_BANK_ACCEPTED':
+      return {
+        title: '📦 ORDER ACCEPTED',
+        text: event.message || 'Blood bank accepted the order and reserved units from storage.',
+        type: 'success',
+      };
     case 'AUTH_ERROR':
       return { title: '🔒 SESSION REJECTED', text: event.message || 'Please sign in again.', type: 'info' };
     default:

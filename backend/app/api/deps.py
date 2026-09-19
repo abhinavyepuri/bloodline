@@ -3,6 +3,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
@@ -109,7 +110,11 @@ async def get_current_donor(
     current_user: User = Depends(get_current_user),
 ) -> Donor:
     """Resolve the donor profile owned by the authenticated user."""
-    res = await db.execute(select(Donor).where(Donor.user_id == current_user.id))
+    res = await db.execute(
+        select(Donor)
+        .options(selectinload(Donor.health_reports))
+        .where(Donor.user_id == current_user.id)
+    )
     donor = res.scalars().first()
     if not donor:
         raise HTTPException(

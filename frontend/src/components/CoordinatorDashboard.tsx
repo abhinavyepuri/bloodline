@@ -31,22 +31,6 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 
-interface AdminOverview {
-  active_requests_count: number;
-  available_inventory_units_count: number;
-  active_donors_count: number;
-  recent_allocations_count: number;
-  system_status: string;
-}
-
-interface AdminMetrics {
-  mtts_minutes?: number;
-  donor_conversion_rate?: number;
-  total_requests?: number;
-  total_allocations?: number;
-  replans_triggered?: number;
-}
-
 const TRIAGE_CONFIG: Record<TriageLevel, { label: string; color: string; bg: string }> = {
   MASSIVE_TRANSFUSION_PROTOCOL: {
     label: 'MTP (Life Threatening)',
@@ -180,8 +164,8 @@ export const CoordinatorDashboard: React.FC = () => {
 
     const body: Record<string, unknown> = {
       reason: overrideReason.trim() || 'Coordinator manual clinical prioritization',
-      target_unit_id: overrideType === 'INVENTORY' ? overrideResourceId : undefined,
-      target_donor_id: overrideType === 'DONOR' ? overrideResourceId : undefined,
+      inventory_unit_id: overrideType === 'INVENTORY' ? overrideResourceId : undefined,
+      donor_id: overrideType === 'DONOR' ? overrideResourceId : undefined,
     };
 
     try {
@@ -249,7 +233,9 @@ export const CoordinatorDashboard: React.FC = () => {
             <Clock size={18} color="var(--amber-500)" />
           </div>
           <div style={{ fontSize: '1.75rem', fontWeight: 800, marginTop: '0.4rem', color: 'var(--amber-500)' }}>
-            {metrics?.mtts_minutes ? `${metrics.mtts_minutes.toFixed(1)}m` : '< 8.5m'}
+            {metrics?.mean_time_to_secure_seconds != null
+              ? `${(metrics.mean_time_to_secure_seconds / 60).toFixed(1)}m`
+              : '—'}
           </div>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
             From clinical intake to resource hard-lock
