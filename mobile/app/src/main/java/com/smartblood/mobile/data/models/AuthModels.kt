@@ -10,6 +10,9 @@ data class LoginRequest(
 data class LoginResponse(
     @SerializedName("access_token") val accessToken: String,
     @SerializedName("token_type") val tokenType: String = "bearer",
+    @SerializedName("role") val role: String? = null,
+    @SerializedName("user_id") val userId: String? = null,
+    @SerializedName("full_name") val fullName: String? = null,
     @SerializedName("user") val user: UserProfile? = null
 )
 

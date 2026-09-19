@@ -1,81 +1,91 @@
 import React, { useState } from 'react';
-import { Activity, AlertCircle, Droplet, UserPlus, LogIn } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import { DEV_ROLE_SWITCHER } from '../config';
-import { api } from '../lib/api';
+import { Activity, AlertCircle, Building2, Droplet, Heart, LogIn, Shield, UserPlus } from 'lucide-react';
+import { useAuth, RegisterPayload } from '../context/AuthContext';
 
-/** Demo accounts, shown only in development to make the walkthrough quick. */
-const DEMO_ACCOUNTS: { label: string; email: string }[] = [
-  { label: 'Coordinator (City Overview)', email: 'coordinator@smartblood.org' },
-  { label: 'Hospital Desk (Metro General)', email: 'hospital@smartblood.org' },
-  { label: 'Blood Bank Storage', email: 'bloodbank@smartblood.org' },
-  { label: 'Volunteer Donor (Alice)', email: 'alice@donor.org' },
-  { label: 'Volunteer Donor (Bob)', email: 'bob@donor.org' },
-  { label: 'System Administrator', email: 'admin@smartblood.org' },
+interface SeededAccount {
+  label: string;
+  email: string;
+  role: string;
+}
+
+const PRESET_ACCOUNTS: SeededAccount[] = [
+  { label: 'Hospital Desk (Metro General)', email: 'hospital@smartblood.org', role: 'HOSPITAL' },
+  { label: 'Blood Bank Storage', email: 'bloodbank@smartblood.org', role: 'BLOOD_BANK' },
+  { label: 'Volunteer Donor (Alice - O-)', email: 'alice@donor.org', role: 'DONOR' },
+  { label: 'Volunteer Donor (Bob - O-)', email: 'bob@donor.org', role: 'DONOR' },
+  { label: 'Emergency Operations (Coordinator)', email: 'coordinator@smartblood.org', role: 'COORDINATOR' },
+  { label: 'System Administrator', email: 'admin@smartblood.org', role: 'ADMIN' },
 ];
 
-const DEMO_PASSWORD = 'password123';
-
 export const LoginScreen: React.FC = () => {
-  const { login, isLoading, error } = useAuth();
+  const { login, register, isLoading, error } = useAuth();
+
+  const [isRegistering, setIsRegistering] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false);
+
+  // Registration fields
   const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [regRole, setRegRole] = useState<'DONOR' | 'HOSPITAL' | 'BLOOD_BANK'>('DONOR');
-  const [regError, setRegError] = useState<string | null>(null);
-  const [registering, setRegistering] = useState(false);
+  const [regRole, setRegRole] = useState<'HOSPITAL' | 'BLOOD_BANK' | 'DONOR'>('HOSPITAL');
+  const [regBloodGroup, setRegBloodGroup] = useState('O-');
+  const [facilityAddress, setFacilityAddress] = useState('');
+  const [localError, setLocalError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLocalError(null);
+
     if (isRegistering) {
-      setRegError(null);
-      setRegistering(true);
+      if (!fullName.trim()) {
+        setLocalError('Please enter your full name or facility name.');
+        return;
+      }
+      if (!phoneNumber.trim()) {
+        setLocalError('Please enter a valid contact phone number.');
+        return;
+      }
       try {
-        await api.post('/auth/register', {
+        const payload: RegisterPayload = {
           email: email.trim(),
           password,
           full_name: fullName.trim(),
           phone_number: phoneNumber.trim(),
           role: regRole,
-        });
-        await login(email.trim(), password);
+          blood_group: regRole === 'DONOR' ? regBloodGroup : undefined,
+          facility_address: facilityAddress.trim() || undefined,
+        };
+        await register(payload);
       } catch (err) {
-        setRegError(err instanceof Error ? err.message : 'Registration failed.');
-      } finally {
-        setRegistering(false);
+        setLocalError(err instanceof Error ? err.message : 'Registration failed.');
       }
       return;
     }
 
     try {
       await login(email.trim(), password);
-    } catch {
-      // The context already surfaced the message; stay on this screen.
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Sign-in failed.');
     }
   };
 
-  const signInAs = async (demoEmail: string) => {
+  const handleSelectPreset = (preset: SeededAccount) => {
     setIsRegistering(false);
-    setEmail(demoEmail);
-    setPassword(DEMO_PASSWORD);
-    try {
-      await login(demoEmail, DEMO_PASSWORD);
-    } catch {
-      // handled by the context
-    }
+    setEmail(preset.email);
+    setPassword('password123');
+    setLocalError(null);
   };
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
-    padding: '0.7rem 0.85rem',
+    padding: '0.75rem 0.95rem',
     fontSize: '0.9rem',
     borderRadius: '8px',
     border: '1px solid var(--border-subtle)',
     background: 'var(--color-bg)',
     color: 'var(--text-main)',
     outline: 'none',
+    transition: 'border-color 0.15s ease',
   };
 
   return (
@@ -89,51 +99,66 @@ export const LoginScreen: React.FC = () => {
         background: 'var(--color-bg)',
       }}
     >
-      <div style={{ width: '100%', maxWidth: '420px' }}>
-        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+      <div style={{ width: '100%', maxWidth: '460px' }}>
+        {/* Brand Header */}
+        <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
           <div
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              width: '56px',
-              height: '56px',
-              borderRadius: '14px',
+              width: '60px',
+              height: '60px',
+              borderRadius: '16px',
               background: 'linear-gradient(135deg, var(--crimson-500), #991b1b)',
+              boxShadow: '0 8px 24px var(--crimson-glow)',
               color: 'white',
-              marginBottom: '0.75rem',
+              marginBottom: '0.85rem',
             }}
           >
-            <Activity size={30} />
+            <Activity size={32} />
           </div>
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-main)' }}>
             SmartBlood
           </h1>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-            Fast Blood Delivery & Volunteer Donor Emergency Network
+          <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+            Unified Emergency Blood Coordination & Dispatch Network
           </p>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
+        {/* Card Form */}
+        <div
           style={{
             background: 'var(--color-surface, #fff)',
             border: '1px solid var(--border-subtle)',
-            borderRadius: '14px',
-            padding: '1.5rem',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.06)',
+            borderRadius: '16px',
+            padding: '1.75rem',
+            boxShadow: '0 12px 36px rgba(0, 0, 0, 0.06)',
           }}
         >
-          {/* Mode Switcher */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1.25rem', background: 'var(--color-bg)', padding: '0.25rem', borderRadius: '8px' }}>
+          {/* Mode Switch Tabs */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '0.5rem',
+              marginBottom: '1.5rem',
+              background: 'var(--color-bg)',
+              padding: '0.3rem',
+              borderRadius: '10px',
+            }}
+          >
             <button
               type="button"
-              onClick={() => setIsRegistering(false)}
+              onClick={() => {
+                setIsRegistering(false);
+                setLocalError(null);
+              }}
               style={{
-                padding: '0.45rem',
-                fontSize: '0.8rem',
+                padding: '0.55rem',
+                fontSize: '0.85rem',
                 fontWeight: 700,
-                borderRadius: '6px',
+                borderRadius: '8px',
                 border: 'none',
                 background: !isRegistering ? 'var(--crimson-500)' : 'transparent',
                 color: !isRegistering ? 'white' : 'var(--text-muted)',
@@ -141,20 +166,24 @@ export const LoginScreen: React.FC = () => {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '0.35rem',
+                gap: '0.4rem',
+                transition: 'all 0.15s ease',
               }}
             >
-              <LogIn size={13} />
+              <LogIn size={15} />
               Sign In
             </button>
             <button
               type="button"
-              onClick={() => setIsRegistering(true)}
+              onClick={() => {
+                setIsRegistering(true);
+                setLocalError(null);
+              }}
               style={{
-                padding: '0.45rem',
-                fontSize: '0.8rem',
+                padding: '0.55rem',
+                fontSize: '0.85rem',
                 fontWeight: 700,
-                borderRadius: '6px',
+                borderRadius: '8px',
                 border: 'none',
                 background: isRegistering ? 'var(--crimson-500)' : 'transparent',
                 color: isRegistering ? 'white' : 'var(--text-muted)',
@@ -162,208 +191,231 @@ export const LoginScreen: React.FC = () => {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '0.35rem',
+                gap: '0.4rem',
+                transition: 'all 0.15s ease',
               }}
             >
-              <UserPlus size={13} />
-              Register
+              <UserPlus size={15} />
+              Create Account
             </button>
           </div>
 
-          {isRegistering && (
-            <>
-              <label
-                htmlFor="reg-fullname"
-                style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}
-              >
-                Full Name / Organization Name
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {isRegistering && (
+              <>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                    Full Name / Facility Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="e.g. Metro Trauma Center / Dr. Sarah Smith"
+                    style={inputStyle}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                    Contact Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    placeholder="e.g. +1-555-0199"
+                    style={inputStyle}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                    Select Your Role / Operation
+                  </label>
+                  <select
+                    className="select-field"
+                    value={regRole}
+                    onChange={(e) => setRegRole(e.target.value as any)}
+                    style={inputStyle}
+                  >
+                    <option value="HOSPITAL">Hospital Emergency Department</option>
+                    <option value="BLOOD_BANK">Blood Bank & Cold-Chain Logistics</option>
+                    <option value="DONOR">Voluntary Blood Donor</option>
+                  </select>
+                </div>
+
+                {regRole === 'DONOR' && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                      Your Blood Group
+                    </label>
+                    <select
+                      className="select-field"
+                      value={regBloodGroup}
+                      onChange={(e) => setRegBloodGroup(e.target.value)}
+                      style={inputStyle}
+                    >
+                      {['O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'].map((bg) => (
+                        <option key={bg} value={bg}>{bg}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {(regRole === 'HOSPITAL' || regRole === 'BLOOD_BANK') && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                      Facility Physical Address
+                    </label>
+                    <input
+                      type="text"
+                      value={facilityAddress}
+                      onChange={(e) => setFacilityAddress(e.target.value)}
+                      placeholder="e.g. 100 Medical Center Blvd"
+                      style={inputStyle}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                Email Address
               </label>
               <input
-                id="reg-fullname"
-                type="text"
+                type="email"
+                autoComplete="email"
                 required
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Dr. Jane Doe / City Donor"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@smartblood.org"
                 style={inputStyle}
               />
+            </div>
 
-              <label
-                htmlFor="reg-phone"
-                style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, margin: '0.75rem 0 0.35rem' }}
-              >
-                Contact Phone Number
+            <div>
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                Password
               </label>
               <input
-                id="reg-phone"
-                type="tel"
+                type="password"
+                autoComplete={isRegistering ? 'new-password' : 'current-password'}
                 required
-                value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                placeholder="+1-555-0199"
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="•••••••• (minimum 6 characters)"
                 style={inputStyle}
               />
+            </div>
 
-              <label
-                htmlFor="reg-role"
-                style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, margin: '0.75rem 0 0.35rem' }}
+            {(error || localError) && (
+              <div
+                role="alert"
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.5rem',
+                  padding: '0.75rem',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  color: 'var(--crimson-500)',
+                  fontSize: '0.82rem',
+                }}
               >
-                Account Type
-              </label>
-              <select
-                id="reg-role"
-                className="select-field"
-                value={regRole}
-                onChange={(e) => setRegRole(e.target.value as any)}
-                style={{ ...inputStyle, marginBottom: '0.75rem' }}
-              >
-                <option value="DONOR">Volunteer Donor (Mobile & Web)</option>
-                <option value="HOSPITAL">Hospital Emergency Desk</option>
-                <option value="BLOOD_BANK">Blood Bank Storage & Logistics</option>
-              </select>
-            </>
-          )}
+                <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '2px' }} />
+                <span>{localError || error}</span>
+              </div>
+            )}
 
-          <label
-            htmlFor="login-email"
-            style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.35rem' }}
-          >
-            Email Address
-          </label>
-          <input
-            id="login-email"
-            type="email"
-            autoComplete="username"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@smartblood.org"
-            style={inputStyle}
-          />
-
-          <label
-            htmlFor="login-password"
-            style={{
-              display: 'block',
-              fontSize: '0.8rem',
-              fontWeight: 700,
-              margin: '0.9rem 0 0.35rem',
-            }}
-          >
-            Password
-          </label>
-          <input
-            id="login-password"
-            type="password"
-            autoComplete={isRegistering ? 'new-password' : 'current-password'}
-            required
-            minLength={6}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="•••••••• (min 6 chars)"
-            style={inputStyle}
-          />
-
-          {(error || regError) && (
-            <div
-              role="alert"
+            <button
+              type="submit"
+              disabled={isLoading}
               style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.5rem',
-                marginTop: '1rem',
-                padding: '0.65rem 0.75rem',
+                width: '100%',
+                marginTop: '0.5rem',
+                padding: '0.85rem',
+                fontSize: '0.92rem',
+                fontWeight: 700,
                 borderRadius: '8px',
-                background: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid rgba(239, 68, 68, 0.25)',
-                color: 'var(--crimson-500)',
-                fontSize: '0.8rem',
+                border: 'none',
+                background: 'var(--crimson-500)',
+                color: 'white',
+                cursor: isLoading ? 'wait' : 'pointer',
+                opacity: isLoading ? 0.7 : 1,
+                boxShadow: '0 4px 14px var(--crimson-glow)',
+                transition: 'all 0.15s ease',
               }}
             >
-              <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
-              <span>{regError || error}</span>
-            </div>
-          )}
+              {isLoading
+                ? 'Authenticating...'
+                : isRegistering
+                ? 'Create Account & Enter Portal'
+                : 'Sign In to Portal'}
+            </button>
+          </form>
 
-          <button
-            type="submit"
-            disabled={isLoading || registering}
-            style={{
-              width: '100%',
-              marginTop: '1.25rem',
-              padding: '0.75rem',
-              fontSize: '0.9rem',
-              fontWeight: 700,
-              borderRadius: '8px',
-              border: 'none',
-              background: 'var(--crimson-500)',
-              color: 'white',
-              cursor: (isLoading || registering) ? 'wait' : 'pointer',
-              opacity: (isLoading || registering) ? 0.7 : 1,
-            }}
-          >
-            {registering
-              ? 'Creating Account...'
-              : isLoading
-              ? 'Signing in…'
-              : isRegistering
-              ? 'Register & Sign In'
-              : 'Sign in'}
-          </button>
-        </form>
-
-        {DEV_ROLE_SWITCHER && (
+          {/* Quick Sign-In Persona Drawer for Fast Verification */}
           <div
             style={{
-              marginTop: '1.25rem',
-              padding: '1rem',
-              borderRadius: '12px',
-              border: '1px dashed var(--border-subtle)',
-              background: 'rgba(245, 158, 11, 0.06)',
+              marginTop: '1.5rem',
+              paddingTop: '1.25rem',
+              borderTop: '1px solid var(--border-subtle)',
             }}
           >
             <div
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
                 fontSize: '0.75rem',
                 fontWeight: 700,
-                color: 'var(--amber-400)',
-                marginBottom: '0.6rem',
+                color: 'var(--text-muted)',
+                marginBottom: '0.65rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
               }}
             >
-              <Droplet size={14} />
-              DEMO ACCOUNTS (development only)
+              Quick Sign-In with Pre-Seeded Personnel:
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-              {DEMO_ACCOUNTS.map((acct) => (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem' }}>
+              {PRESET_ACCOUNTS.map((preset) => (
                 <button
-                  key={acct.email}
+                  key={preset.email}
                   type="button"
                   disabled={isLoading}
-                  onClick={() => signInAs(acct.email)}
+                  onClick={() => handleSelectPreset(preset)}
                   style={{
-                    padding: '0.35rem 0.6rem',
-                    fontSize: '0.72rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.45rem 0.65rem',
+                    fontSize: '0.75rem',
                     fontWeight: 600,
                     borderRadius: '6px',
                     border: '1px solid var(--border-subtle)',
                     background: 'var(--color-bg)',
-                    color: 'var(--text-muted)',
+                    color: 'var(--text-main)',
                     cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'all 0.15s ease',
                   }}
                 >
-                  {acct.label}
+                  {preset.role === 'HOSPITAL' && <Building2 size={13} color="var(--crimson-500)" style={{ flexShrink: 0 }} />}
+                  {preset.role === 'BLOOD_BANK' && <Droplet size={13} color="var(--amber-500)" style={{ flexShrink: 0 }} />}
+                  {preset.role === 'DONOR' && <Heart size={13} color="var(--emerald-500)" style={{ flexShrink: 0 }} />}
+                  {preset.role === 'COORDINATOR' && <Activity size={13} color="var(--cyan-400)" style={{ flexShrink: 0 }} />}
+                  {preset.role === 'ADMIN' && <Shield size={13} color="var(--purple-400)" style={{ flexShrink: 0 }} />}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={preset.label}>
+                    {preset.label}
+                  </span>
                 </button>
               ))}
             </div>
-            <p style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.6rem' }}>
-              All demo accounts use the password <code>{DEMO_PASSWORD}</code>. This panel is
-              removed from production builds.
-            </p>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

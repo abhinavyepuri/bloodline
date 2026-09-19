@@ -95,10 +95,10 @@ const DashboardSwitch: React.FC = () => {
         background: 'var(--color-bg)',
       }}>
         <p>
-          SmartBlood (Yarin) Emergency Blood Logistics Platform • Built with FastAPI, PostgreSQL + PostGIS, Redis & WebSockets
+          SmartBlood Emergency Blood Coordination & Dispatch Network • Real-time clinical blood logistics for hospitals, blood banks, and volunteer donors.
         </p>
         <p style={{ marginTop: '0.35rem', color: 'var(--text-muted)' }}>
-          Prototype demonstration. All donor coordinates, hospital identities, and patient tokens are synthetically generated.
+          Connected via WebSockets, FastAPI, PostgreSQL + PostGIS, and Redis Pub/Sub.
         </p>
       </footer>
     </div>

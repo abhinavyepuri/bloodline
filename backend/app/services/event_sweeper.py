@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import logging
 from typing import Optional
 from app.core.redis import get_redis
@@ -86,3 +86,4 @@ def stop_event_sweepers() -> None:
     global _sweeper_task
     if _sweeper_task and not _sweeper_task.done():
         _sweeper_task.cancel()
+    _sweeper_task = None

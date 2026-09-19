@@ -1,6 +1,7 @@
 from typing import Optional, Any
 from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 from app.core.permissions import UserRole
+from app.schemas.user import UserOut
 
 
 class Token(BaseModel):
@@ -9,6 +10,7 @@ class Token(BaseModel):
     role: UserRole
     user_id: str
     full_name: str
+    user: Optional[UserOut] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -41,6 +43,8 @@ class RegisterRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=120, description="Full name or entity name")
     phone_number: str = Field(..., min_length=5, max_length=30, description="Contact phone number")
     role: UserRole = Field(..., description="Role: HOSPITAL, BLOOD_BANK, DONOR, COORDINATOR, ADMIN")
+    blood_group: Optional[str] = Field(None, description="Donor blood group (e.g. O-, O+, A-, A+, B-, B+, AB-, AB+)")
+    facility_address: Optional[str] = Field(None, description="Hospital or Blood Bank physical address")
 
     model_config = ConfigDict(
         extra="forbid",

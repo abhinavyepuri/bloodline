@@ -1,4 +1,3 @@
-from datetime import date
 from sqlalchemy import Column, String, Float, Boolean, Date, ForeignKey, Integer
 from sqlalchemy.orm import relationship
 from geoalchemy2 import Geography

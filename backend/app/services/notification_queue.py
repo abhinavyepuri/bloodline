@@ -42,7 +42,7 @@ class NotificationQueueService:
             "hospital_name": hospital_name or "Emergency Hospital",
             "donor_ids": donor_ids,
             "distance_km_map": distance_km_map or {},
-            "timestamp": asyncio.get_event_loop().time(),
+            "timestamp": asyncio.get_running_loop().time(),
         }
         return await cls._push_to_queue(payload)
 
@@ -67,7 +67,7 @@ class NotificationQueueService:
             "status": status,
             "message": message,
             "meta": meta or {},
-            "timestamp": asyncio.get_event_loop().time(),
+            "timestamp": asyncio.get_running_loop().time(),
         }
         return await cls._push_to_queue(payload)
 

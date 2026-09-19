@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user, is_elevated, resolve_role
+from app.api.deps import get_current_user, resolve_role
 from app.core.database import get_db
 from app.core.permissions import UserRole
 from app.core.redis import ConcurrencyLockManager, get_redis

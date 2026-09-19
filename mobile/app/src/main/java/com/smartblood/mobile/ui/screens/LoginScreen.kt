@@ -25,8 +25,10 @@ import kotlinx.coroutines.launch
 fun LoginScreen(
     onLoginSuccess: (token: String, role: String) -> Unit
 ) {
-    var email by remember { mutableStateOf("donor1@smartblood.org") }
-    var password by remember { mutableStateOf("securePass123!") }
+    var email by remember { mutableStateOf("alice@donor.org") }
+    var password by remember { mutableStateOf("password123") }
+    var serverHost by remember { mutableStateOf("10.0.2.2:8000") }
+    var showServerConfig by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
@@ -106,24 +108,54 @@ fun LoginScreen(
                     )
                 )
 
+                if (showServerConfig) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = serverHost,
+                        onValueChange = { serverHost = it },
+                        label = { Text("Server Host (IP:Port)") },
+                        placeholder = { Text("10.0.2.2:8000 (Emulator) or 192.168.1.6:8000 (Phone)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CyanAccent,
+                            unfocusedBorderColor = SurfaceCard,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        )
+                    )
+                }
+
+                TextButton(
+                    onClick = { showServerConfig = !showServerConfig },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text(
+                        text = if (showServerConfig) "Hide Server Settings" else "Server Settings (IP/Port)",
+                        fontSize = 12.sp,
+                        color = CyanAccent
+                    )
+                }
+
                 errorMessage?.let { msg ->
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(text = msg, color = CrimsonLight, fontSize = 13.sp)
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
                     onClick = {
                         isLoading = true
                         errorMessage = null
+                        ApiClient.setServerHost(serverHost)
                         coroutineScope.launch {
                             try {
                                 val resp = ApiClient.service.login(LoginRequest(email.trim(), password))
                                 if (resp.isSuccessful && resp.body() != null) {
                                     val body = resp.body()!!
                                     ApiClient.setAuthToken(body.accessToken)
-                                    val role = body.user?.role ?: "DONOR"
+                                    val role = body.role ?: body.user?.role ?: "DONOR"
                                     onLoginSuccess(body.accessToken, role)
                                 } else {
                                     errorMessage = "Authentication failed: ${resp.code()} ${resp.message()}"

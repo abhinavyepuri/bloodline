@@ -58,9 +58,9 @@ async def register_user(req: RegisterRequest, db: AsyncSession = Depends(get_db)
     if role_enum == UserRole.HOSPITAL:
         hospital = Hospital(
             user_id=user.id,
-            name=f"{req.full_name.strip()}'s Hospital",
+            name=f"{req.full_name.strip()}",
             license_number=f"HOSP-{user.id[:8].upper()}",
-            address="100 Medical Center Way",
+            address=req.facility_address or "100 Medical Center Way",
             contact_phone=normalized_phone,
             latitude=12.9716,
             longitude=77.5946,
@@ -68,9 +68,10 @@ async def register_user(req: RegisterRequest, db: AsyncSession = Depends(get_db)
         )
         db.add(hospital)
     elif role_enum == UserRole.DONOR:
+        valid_bg = req.blood_group.strip().upper() if req.blood_group else "O-"
         donor = Donor(
             user_id=user.id,
-            blood_group="O+",
+            blood_group=valid_bg,
             date_of_birth=date(1995, 1, 1),
             weight_kg=70.0,
             is_available=True,
@@ -82,9 +83,9 @@ async def register_user(req: RegisterRequest, db: AsyncSession = Depends(get_db)
     elif role_enum == UserRole.BLOOD_BANK:
         bank = BloodBank(
             user_id=user.id,
-            name=f"{req.full_name.strip()}'s Blood Bank",
+            name=f"{req.full_name.strip()}",
             license_number=f"BB-{user.id[:8].upper()}",
-            address="200 Red Cross Blvd",
+            address=req.facility_address or "200 Red Cross Blvd",
             contact_phone=normalized_phone,
             latitude=12.9716,
             longitude=77.5946,
@@ -113,7 +114,8 @@ async def login_user(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         token_type="bearer",
         role=UserRole(role_val),
         user_id=user.id,
-        full_name=user.full_name
+        full_name=user.full_name,
+        user=UserOut.model_validate(user),
     )
 
 

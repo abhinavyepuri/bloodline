@@ -30,6 +30,7 @@ class ConnectionManager:
         self._socket_channels: Dict[WebSocket, Set[str]] = {}
         self._pubsub_task: Optional[asyncio.Task] = None
         self._is_listening: bool = False
+        self._background_tasks: Set[asyncio.Task] = set()
 
     # ------------------------------------------------------------ lifecycle
     async def connect(
@@ -86,7 +87,10 @@ class ConnectionManager:
 
     def dispatch(self, coroutine) -> asyncio.Task:
         """Fire-and-forget background broadcast that never blocks the HTTP response."""
-        return asyncio.create_task(coroutine)
+        task = asyncio.create_task(coroutine)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     async def _send_to_channel(self, channel: str, message: dict) -> None:
         subscribers = self.subscriptions.get(channel)
@@ -173,6 +177,10 @@ class ConnectionManager:
         self._is_listening = False
         if self._pubsub_task and not self._pubsub_task.done():
             self._pubsub_task.cancel()
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        self._background_tasks.clear()
 
     # ---------------------------------------------------------- broadcasts
     async def broadcast(self, message: dict) -> None:

@@ -1,8 +1,8 @@
 import asyncio
 from datetime import datetime, timezone, timedelta, date
 from geoalchemy2.functions import ST_SetSRID, ST_Point
-from sqlalchemy import select, delete
-from app.core.database import AsyncSessionLocal, engine, Base
+from sqlalchemy import delete
+from app.core.database import AsyncSessionLocal
 from app.core.security import get_password_hash
 from app.core.permissions import UserRole
 from app.models.user import User

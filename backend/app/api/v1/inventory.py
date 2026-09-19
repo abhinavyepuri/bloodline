@@ -2,12 +2,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import and_, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     get_current_blood_bank,
-    get_current_user,
-    is_elevated,
     require_roles,
     resolve_role,
 )
@@ -212,51 +211,62 @@ async def list_incoming_hospital_orders(
     db: AsyncSession = Depends(get_db),
     current_user: User = StockUser,
 ):
-    """[USER-FACING] List emergency blood orders routed from hospitals to this blood bank."""
+    """[USER-FACING] List emergency blood orders routed from hospitals across the network."""
     bank = await _owning_bank(db, current_user)
 
-    alloc_query = (
-        select(Allocation, BloodRequest, Hospital, InventoryUnit)
-        .join(BloodRequest, Allocation.request_id == BloodRequest.id)
-        .join(Hospital, BloodRequest.hospital_id == Hospital.id)
-        .join(InventoryUnit, Allocation.inventory_unit_id == InventoryUnit.id)
+    req_query = (
+        select(BloodRequest)
+        .options(
+            selectinload(BloodRequest.hospital),
+            selectinload(BloodRequest.allocations).selectinload(Allocation.inventory_unit),
+        )
+        .order_by(BloodRequest.calculated_urgency_score.desc(), BloodRequest.created_at.desc())
     )
-    if bank is not None:
-        alloc_query = alloc_query.where(InventoryUnit.blood_bank_id == bank.id)
+    req_results = (await db.execute(req_query)).scalars().all()
 
-    results = (await db.execute(alloc_query)).all()
+    orders_list = []
+    for req in req_results:
+        hosp = req.hospital
+        hosp_name = hosp.name if hosp else "Emergency Medical Center"
+        hosp_address = hosp.address if hosp else "Hospital Ward"
 
-    orders_map = {}
-    for alloc, req, hosp, unit in results:
-        if req.id not in orders_map:
-            orders_map[req.id] = {
+        allocated_units = []
+        for alloc in (req.allocations or []):
+            if alloc.inventory_unit:
+                if bank and alloc.inventory_unit.blood_bank_id != bank.id:
+                    continue
+                allocated_units.append(
+                    {
+                        "unit_id": alloc.inventory_unit.id,
+                        "batch_number": alloc.inventory_unit.batch_number,
+                        "blood_group": alloc.inventory_unit.blood_group,
+                        "unit_status": alloc.inventory_unit.status.value,
+                        "allocation_status": alloc.status.value,
+                        "allocation_id": alloc.id,
+                    }
+                )
+
+        orders_list.append(
+            {
                 "request_id": req.id,
-                "hospital_name": hosp.name,
-                "hospital_address": hosp.address,
+                "hospital_name": hosp_name,
+                "hospital_address": hosp_address,
                 "patient_id_token": req.patient_id_token,
                 "required_blood_group": req.required_blood_group,
                 "component_type": req.component_type.value,
                 "units_requested": req.units_requested,
+                "units_covered": req.units_covered,
                 "triage_level": req.triage_level.value,
                 "calculated_urgency_score": req.calculated_urgency_score,
                 "status": req.status.value,
                 "created_at": req.created_at.isoformat()
                 if hasattr(req.created_at, "isoformat")
                 else str(req.created_at),
-                "allocated_units": [],
-            }
-        orders_map[req.id]["allocated_units"].append(
-            {
-                "unit_id": unit.id,
-                "batch_number": unit.batch_number,
-                "blood_group": unit.blood_group,
-                "unit_status": unit.status.value,
-                "allocation_status": alloc.status.value,
-                "allocation_id": alloc.id,
+                "allocated_units": allocated_units,
             }
         )
 
-    return list(orders_map.values())
+    return orders_list
 
 
 @router.post("/orders/{request_id}/dispatch")

@@ -22,6 +22,7 @@ export const HospitalDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   // Form State
+  const [patientIdToken, setPatientIdToken] = useState(() => `PT-${Math.floor(100000 + Math.random() * 900000)}`);
   const [bloodGroup, setBloodGroup] = useState('O-');
   const [componentType, setComponentType] = useState<BloodComponentType>('PRBC');
   const [units, setUnits] = useState(2);
@@ -29,9 +30,16 @@ export const HospitalDashboard: React.FC = () => {
   const [deadlineMinutes, setDeadlineMinutes] = useState(15);
   const [submitting, setSubmitting] = useState(false);
 
+  // Proximity Alert State (PRD Section 4.1: Trauma Bay Push Notification within 500m)
+  const [wardAlert, setWardAlert] = useState<{ message: string; timestamp: string } | null>(null);
+
   // Audit Explanation State
   const [selectedAuditLog, setSelectedAuditLog] = useState<AllocationAuditLog[] | null>(null);
   const [inspectingReqId, setInspectingReqId] = useState<string | null>(null);
+
+  const generateNewToken = () => {
+    setPatientIdToken(`PT-${Math.floor(100000 + Math.random() * 900000)}`);
+  };
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
@@ -50,14 +58,24 @@ export const HospitalDashboard: React.FC = () => {
     fetchRequests();
   }, [fetchRequests, user]);
 
-  // Refresh on relevant WebSocket events
+  // Refresh on relevant WebSocket events & handle 500m trauma bay approach alert
   useEffect(() => {
+    if (!lastEvent) return;
+
+    if (lastEvent.type === 'DONOR_APPROACHING_WARD' || lastEvent.type === 'COURIER_APPROACHING_WARD') {
+      setWardAlert({
+        message: lastEvent.message || 'Inbound blood donor / courier has entered the 500m emergency ward geofence. Pre-warm blood thawers and prepare patient transfusion line!',
+        timestamp: new Date().toLocaleTimeString(),
+      });
+    }
+
     if (
-      lastEvent &&
       [
         'REQUEST_CREATED',
         'INVENTORY_LOCKED',
         'DONOR_CLAIM_SUCCESS',
+        'BLOOD_BANK_DISPATCHED',
+        'DONOR_APPROACHING_WARD',
         'RE_PLANNING_TRIGGERED',
         'ALTERNATIVE_FOUND',
         'REQUEST_FULFILLED',
@@ -76,7 +94,7 @@ export const HospitalDashboard: React.FC = () => {
 
     const deadlineAt = new Date(Date.now() + deadlineMinutes * 60000).toISOString();
     const payload = {
-      patient_id_token: `PT-${Math.floor(100000 + Math.random() * 900000)}`,
+      patient_id_token: patientIdToken.trim() || `PT-${Math.floor(100000 + Math.random() * 900000)}`,
       required_blood_group: bloodGroup,
       component_type: componentType,
       units_requested: Number(units),
@@ -87,6 +105,7 @@ export const HospitalDashboard: React.FC = () => {
     try {
       // Hospital accounts always order for their own facility, so no hospital_id is sent.
       await api.post<BloodRequest>('/requests', payload);
+      generateNewToken();
       await fetchRequests();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not submit the request.');
@@ -134,6 +153,38 @@ export const HospitalDashboard: React.FC = () => {
         </div>
 
         <form onSubmit={handleCreateRequest} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                Patient MRN / Case Identifier
+              </label>
+              <button
+                type="button"
+                onClick={generateNewToken}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--cyan-400)',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  padding: 0,
+                }}
+              >
+                Auto-generate
+              </button>
+            </div>
+            <input
+              id="intake-patient-token"
+              type="text"
+              required
+              className="input-field"
+              placeholder="e.g. PT-904812"
+              value={patientIdToken}
+              onChange={(e) => setPatientIdToken(e.target.value)}
+            />
+          </div>
+
           <div>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.35rem', display: 'block' }}>
               Blood Group Needed
@@ -229,6 +280,47 @@ export const HospitalDashboard: React.FC = () => {
 
       {/* Live Active Requests Feed */}
       <div>
+        {/* Proximity 500m Ward Approach Alert */}
+        {wardAlert && (
+          <div
+            style={{
+              background: 'linear-gradient(135deg, rgba(220, 38, 38, 0.2), rgba(153, 27, 27, 0.3))',
+              border: '2px solid var(--crimson-500)',
+              borderRadius: '10px',
+              padding: '1rem 1.25rem',
+              marginBottom: '1.25rem',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '0.85rem',
+              boxShadow: '0 0 20px rgba(239, 68, 68, 0.25)',
+              animation: 'pulseGlow 2s infinite',
+            }}
+          >
+            <ShieldAlert size={26} color="var(--crimson-500)" style={{ flexShrink: 0, marginTop: '2px' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 800, color: 'var(--crimson-500)', fontSize: '0.95rem', letterSpacing: '0.03em' }}>
+                  🚨 TRAUMA BAY PROXIMITY ALERT (WITHIN 500M)
+                </span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{wardAlert.timestamp}</span>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-main)', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                {wardAlert.message}
+              </p>
+              <div style={{ fontSize: '0.78rem', color: 'var(--amber-400)', marginTop: '0.4rem', fontWeight: 600 }}>
+                ⚡ Action Required: Pre-warm rapid blood thawers and notify trauma surgical team.
+              </div>
+            </div>
+            <button
+              onClick={() => setWardAlert(null)}
+              aria-label="Acknowledge alert"
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '0.2rem' }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Clock size={20} color="var(--cyan-400)" />

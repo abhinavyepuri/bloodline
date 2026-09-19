@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from enum import Enum
 from sqlalchemy import Column, String, Float, DateTime, Enum as SQLEnum, ForeignKey
 from sqlalchemy.orm import relationship

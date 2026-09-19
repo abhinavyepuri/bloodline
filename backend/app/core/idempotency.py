@@ -1,7 +1,6 @@
-﻿import json
+import json
 import logging
-from typing import Optional
-from fastapi import Request, Response
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from app.core.redis import get_redis

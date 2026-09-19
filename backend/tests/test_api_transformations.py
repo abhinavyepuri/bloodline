@@ -5,18 +5,16 @@ from starlette.testclient import TestClient
 
 from app.main import app
 from app.core.permissions import UserRole, RoleChecker
-from app.core.exceptions import DomainException, IncompatibleBloodTypeError, AllocationRaceConditionError
 from app.models.inventory import BloodComponentType, UnitStatus
 from app.models.request import TriageLevel, RequestStatus
-from app.models.allocation import AllocationSourceType, AllocationStatus
-from app.schemas.auth import LoginRequest, RegisterRequest, Token
+from app.schemas.auth import LoginRequest, RegisterRequest
 from app.schemas.user import UserOut
 from app.schemas.request import BloodRequestCreate, BloodRequestOut
 from app.schemas.donor import DonorCreate, DonorUpdateAvailability, DonorOut
 from app.schemas.inventory import InventoryUnitCreate, InventoryUnitUpdateStatus, InventoryUnitOut
-from app.schemas.allocation import DonorRespondRequest, DonorRespondOut, AllocationOut
+from app.schemas.allocation import DonorRespondRequest
 from app.schemas.audit import AllocationAuditLogOut
-from app.schemas.admin import AdminOverviewOut, AdminOverrideRequest, AdminOverrideOut
+from app.schemas.admin import AdminOverviewOut, AdminOverrideRequest
 
 
 class TestStrictNormalizationAndValidation(unittest.TestCase):
