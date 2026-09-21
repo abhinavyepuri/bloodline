@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SmartBloodMobile"
+rootProject.name = "BloodlineMobile"
 include(":app")

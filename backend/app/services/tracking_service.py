@@ -14,7 +14,7 @@ from app.models.request import BloodRequest
 from app.schemas.donor import DonorTelemetryOut
 from app.websocket.connection_manager import manager
 
-logger = logging.getLogger("smartblood.tracking")
+logger = logging.getLogger("bloodline.tracking")
 
 APPROACHING_THRESHOLD_METERS = 500.0
 DEFAULT_SPEED_KMH = 30.0  # Urban transit speed

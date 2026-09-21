@@ -1,6 +1,6 @@
-# SmartBlood — Web Frontend Application
+# Bloodline — Web Frontend Application
 
-The web frontend for **SmartBlood (Yarin)** is an enterprise emergency blood coordination and voluntary donor dispatch portal built with **React 19**, **TypeScript**, and **Vite 8**.
+The web frontend for **Bloodline** is an enterprise emergency blood coordination and voluntary donor dispatch portal built with **React 19**, **TypeScript**, and **Vite 8**.
 
 ---
 

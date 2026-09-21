@@ -146,7 +146,7 @@ export const LoginScreen: React.FC = () => {
             <Activity size={32} />
           </div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-main)' }}>
-            SmartBlood
+            Bloodline
           </h1>
           <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
             Unified Emergency Blood Coordination & Dispatch Network

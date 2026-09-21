@@ -1,5 +1,5 @@
 # Product Requirements Document
-# SmartBlood — Smart Blood & Emergency Donor Network
+# Bloodline — Real-Time Emergency Blood & Donor Network
 
 **Version:** 1.0  
 **Status:** Implementation-Ready  
@@ -11,8 +11,7 @@
 ## 1. Product Overview
 
 ### 1.1 Product Name
-**SmartBlood** — Smart Blood & Emergency Donor Network  
-*(Internal project codename: bloodline)*
+**Bloodline** — Real-Time Emergency Blood & Donor Network
 
 ### 1.2 Problem Being Solved
 During medical emergencies, patients and their families face critical delays in sourcing compatible blood. Information about blood availability is fragmented across blood banks, hospitals, voluntary donors, and informal contact networks. Even when a blood unit or eligible donor exists, determining whether it is:

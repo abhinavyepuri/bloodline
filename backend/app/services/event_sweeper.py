@@ -4,7 +4,7 @@ from typing import Optional
 from app.core.redis import get_redis
 from app.core.database import AsyncSessionLocal
 
-logger = logging.getLogger("smartblood.sweeper")
+logger = logging.getLogger("bloodline.sweeper")
 
 _sweeper_task: Optional[asyncio.Task] = None
 

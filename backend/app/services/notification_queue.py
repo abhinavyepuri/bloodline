@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from app.core.redis import get_redis
 
-logger = logging.getLogger("smartblood.notifications")
+logger = logging.getLogger("bloodline.notifications")
 
 NOTIFICATION_QUEUE_KEY = "queue:notifications:push"
 DEAD_LETTER_QUEUE_KEY = "queue:notifications:dlq"

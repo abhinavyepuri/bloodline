@@ -1,4 +1,4 @@
-# SmartBlood Mobile Application (Android)
+# Bloodline Mobile Application (Android)
 
 Native Android voluntary donor emergency response and field dispatch app built with **Kotlin** and **Jetpack Compose**, integrated with the **FastAPI** Python backend.
 

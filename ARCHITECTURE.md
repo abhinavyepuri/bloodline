@@ -1,5 +1,5 @@
 # System Architecture
-# SmartBlood (Yarin) — Smart Blood & Emergency Donor Network
+# Bloodline — Real-Time Emergency Blood & Donor Network
 
 **Version:** 2.0 (Enterprise Resilient Architecture)  
 **Stack Reference:** [Stack.md](Stack.md)  
@@ -11,7 +11,7 @@
 
 ## 1. Executive Summary & Architectural Tenets
 
-SmartBlood (Yarin) is an intelligent, real-time emergency blood allocation and voluntary donor dispatch platform. It bridges hospitals, blood banks, and voluntary donors with geospatial proximity matching, automated biological compatibility checks, distributed concurrency locks, background task workers, live WebSocket updates, and predictive in-transit GPS telemetry.
+Bloodline is an intelligent, real-time emergency blood allocation and voluntary donor dispatch platform. It bridges hospitals, blood banks, and voluntary donors with geospatial proximity matching, automated biological compatibility checks, distributed concurrency locks, background task workers, live WebSocket updates, and predictive in-transit GPS telemetry.
 
 The system is designed around six foundational architectural tenets:
 

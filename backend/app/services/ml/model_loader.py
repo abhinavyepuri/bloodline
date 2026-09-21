@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from app.core.config import settings
 
-logger = logging.getLogger("smartblood.ml")
+logger = logging.getLogger("bloodline.ml")
 
 
 def get_default_artifact_dir() -> Path:

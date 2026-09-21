@@ -5,7 +5,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from app.core.redis import get_redis
 
-logger = logging.getLogger("smartblood.idempotency")
+logger = logging.getLogger("bloodline.idempotency")
 
 IDEMPOTENCY_PREFIX = "idempotency:"
 IDEMPOTENCY_TTL_SECONDS = 86400  # 24 hours

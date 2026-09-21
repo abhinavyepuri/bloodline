@@ -1,4 +1,4 @@
-# SmartBlood (Yarin) — Real-Time Emergency Blood & Donor Network
+# Bloodline — Real-Time Emergency Blood & Donor Network
 
 A real-time emergency blood coordination and voluntary donor dispatch platform connecting
 hospitals, blood banks, and verified voluntary donors with geospatial proximity geofencing,

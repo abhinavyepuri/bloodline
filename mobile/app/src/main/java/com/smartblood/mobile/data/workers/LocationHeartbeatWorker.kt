@@ -68,7 +68,7 @@ class LocationHeartbeatWorker(
 
     companion object {
         private const val TAG = "LocationHeartbeat"
-        private const val UNIQUE_WORK_NAME = "SmartBlood_LocationHeartbeat"
+        private const val UNIQUE_WORK_NAME = "Bloodline_LocationHeartbeat"
 
         /**
          * Enqueues a periodic heartbeat worker running every 15 minutes while connected to network.

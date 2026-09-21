@@ -6,9 +6,9 @@ from typing import Dict, Iterable, List, Optional, Set
 from fastapi import WebSocket
 from app.core.redis import get_redis
 
-logger = logging.getLogger("smartblood.ws")
+logger = logging.getLogger("bloodline.ws")
 
-REDIS_PUBSUB_CHANNEL = "smartblood:ws:events"
+REDIS_PUBSUB_CHANNEL = "bloodline:ws:events"
 
 
 class ConnectionManager:

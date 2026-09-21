@@ -24,7 +24,7 @@ from app.services.ml.feature_builder import FeatureBuilder
 from app.services.ml.model_loader import ml_manager
 from app.services.ml.transfer_service import TransferRecommendationService
 
-logger = logging.getLogger("smartblood.ml")
+logger = logging.getLogger("bloodline.ml")
 
 
 class PredictionService:

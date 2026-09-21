@@ -1,6 +1,6 @@
-# SmartBlood — FastAPI Backend Service
+# Bloodline — FastAPI Backend Service
 
-The core application service and real-time coordination engine for **SmartBlood (Yarin)** built with **FastAPI**, **PostgreSQL 16 + PostGIS 3.4**, **Redis 7.2**, and a **Two-Tier Background Worker Engine**.
+The core application service and real-time coordination engine for **Bloodline** built with **FastAPI**, **PostgreSQL 16 + PostGIS 3.4**, **Redis 7.2**, and a **Two-Tier Background Worker Engine**.
 
 ---
 

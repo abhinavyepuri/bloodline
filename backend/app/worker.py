@@ -16,7 +16,7 @@ from app.services.notification_queue import NotificationQueueService
 from app.services.event_sweeper import redis_keyspace_listener
 from app.services.inventory_service import run_lifecycle_sweep, check_near_expiry_units
 
-logger = logging.getLogger("smartblood.worker")
+logger = logging.getLogger("bloodline.worker")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [Worker] %(message)s",
@@ -62,7 +62,7 @@ class BackgroundWorkerDaemon:
             await asyncio.sleep(SWEEP_INTERVAL)
 
     async def start(self):
-        logger.info(f"Starting SmartBlood Background Worker Daemon [{settings.PROJECT_NAME}]")
+        logger.info(f"Starting Bloodline Background Worker Daemon [{settings.PROJECT_NAME}]")
         self.tasks.append(asyncio.create_task(self.notification_worker_loop()))
         self.tasks.append(asyncio.create_task(self.inventory_sweep_loop()))
         self.tasks.append(asyncio.create_task(redis_keyspace_listener()))

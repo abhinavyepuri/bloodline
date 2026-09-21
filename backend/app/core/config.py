@@ -7,7 +7,7 @@ DEV_SECRET_KEY = "development-secret-key-change-in-production-minimum-32-charact
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "PS-1 Smart Blood & Emergency Donor Network"
+    PROJECT_NAME: str = "Bloodline — Emergency Blood & Donor Network"
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = True
     ENVIRONMENT: str = "development"

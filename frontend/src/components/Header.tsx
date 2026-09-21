@@ -98,7 +98,7 @@ export const Header: React.FC = () => {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
               <span style={{ fontSize: '1.2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-main)' }}>
-                SmartBlood
+                Bloodline
               </span>
               <span
                 style={{

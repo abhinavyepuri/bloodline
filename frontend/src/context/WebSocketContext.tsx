@@ -104,7 +104,7 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       try {
         socket = new WebSocket(`${WS_URL}?token=${encodeURIComponent(token)}`);
       } catch (err) {
-        console.error('Failed to open SmartBlood WebSocket:', err);
+        console.error('Failed to open Bloodline WebSocket:', err);
         reconnectTimerRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
         return;
       }
@@ -125,7 +125,7 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
         if (data.type === 'pong' || data.type === 'AUTH_ERROR') {
           if (data.type === 'AUTH_ERROR') {
-            console.warn('SmartBlood WebSocket rejected the session:', data.message);
+            console.warn('Bloodline WebSocket rejected the session:', data.message);
             setToastMessage(toastFor(data));
           }
           return;

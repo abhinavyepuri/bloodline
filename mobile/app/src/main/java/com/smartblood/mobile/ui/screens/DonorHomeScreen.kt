@@ -95,7 +95,7 @@ fun DonorHomeScreen(
                 title = {
                     Column {
                         Text(
-                            text = "SmartBlood Donor",
+                            text = "Bloodline Donor",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary

@@ -18,7 +18,7 @@ from app.websocket.routes import router as ws_router
 from app.websocket.connection_manager import manager
 from app.services.event_sweeper import start_event_sweepers, stop_event_sweepers
 
-logger = logging.getLogger("smartblood")
+logger = logging.getLogger("bloodline")
 logging.basicConfig(level=logging.INFO)
 
 # How often the inventory lifecycle sweep runs.
@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
             )
         except Exception as e:
             logger.warning(
-                f"\n⚠️  [SmartBlood Startup Notice]: Could not connect to PostgreSQL on startup ({e}).\n"
+                f"\n⚠️  [Bloodline Startup Notice]: Could not connect to PostgreSQL on startup ({e}).\n"
                 f"👉  Make sure PostgreSQL and Redis are running via Docker: 'docker compose up db redis -d'\n"
             )
     else:
@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
         logger.info("Connected to Redis (distributed locking and real-time alert zones).")
     else:
         logger.warning(
-            f"\n⚠️  [SmartBlood Startup Notice]: Could not reach Redis at {settings.REDIS_URL}.\n"
+            f"\n⚠️  [Bloodline Startup Notice]: Could not reach Redis at {settings.REDIS_URL}.\n"
             f"👉  Donor alerting and per-unit locking will fail until Redis is available: "
             f"'docker compose up redis -d'\n"
         )

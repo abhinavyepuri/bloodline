@@ -1,5 +1,5 @@
 /**
- * SmartBlood Dynamic Deployment & Environment Configuration.
+ * Bloodline Dynamic Deployment & Environment Configuration.
  *
  * Automatically resolves the backend API and WebSocket endpoints based on the active
  * client environment, eliminating hardcoded hostnames or protocol mismatches.

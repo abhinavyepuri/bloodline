@@ -95,7 +95,7 @@ const DashboardSwitch: React.FC = () => {
         background: 'var(--color-bg)',
       }}>
         <p>
-          SmartBlood Emergency Blood Coordination & Dispatch Network • Real-time clinical blood logistics for hospitals, blood banks, and volunteer donors.
+          Bloodline Emergency Blood Coordination &amp; Dispatch Network • Real-time clinical blood logistics for hospitals, blood banks, and volunteer donors.
         </p>
         <p style={{ marginTop: '0.35rem', color: 'var(--text-muted)' }}>
           Connected via WebSockets, FastAPI, PostgreSQL + PostGIS, and Redis Pub/Sub.

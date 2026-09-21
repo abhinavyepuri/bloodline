@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">SmartBlood Mobile</string>
+    <string name="app_name">Bloodline</string>
     <string name="emergency_network">Emergency Blood Network</string>
     <string name="login_title">Donor &amp; Field Login</string>
 </resources>

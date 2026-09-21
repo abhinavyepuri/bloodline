@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inventory import InventoryUnit, UnitStatus
 
-logger = logging.getLogger("smartblood.inventory")
+logger = logging.getLogger("bloodline.inventory")
 
 
 async def expire_stale_units(db: AsyncSession, commit: bool = True) -> List[str]:

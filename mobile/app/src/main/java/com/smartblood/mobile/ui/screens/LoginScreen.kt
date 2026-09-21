@@ -84,7 +84,7 @@ fun LoginScreen(
                         .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // SmartBlood Logo Icon
+                    // Bloodline Logo Icon
                     Box(
                         modifier = Modifier
                             .size(64.dp)
@@ -94,7 +94,7 @@ fun LoginScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Favorite,
-                            contentDescription = "SmartBlood Donor App",
+                            contentDescription = "Bloodline Donor App",
                             tint = Color.White,
                             modifier = Modifier.size(36.dp)
                         )
@@ -103,7 +103,7 @@ fun LoginScreen(
                     Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
-                        text = "SmartBlood",
+                        text = "Bloodline",
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary

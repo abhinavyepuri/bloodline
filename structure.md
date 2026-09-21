@@ -1,12 +1,12 @@
-# SmartBlood (Yarin) — Backend Architecture & Workflow Specification
+# Bloodline — Backend Architecture & Workflow Specification
 
-This document provides a comprehensive technical breakdown of the SmartBlood backend architecture, request processing lifecycles, concurrency controls, biological cross-matching rules, data models, route-by-route execution flows, and implemented enterprise architectural optimizations.
+This document provides a comprehensive technical breakdown of the Bloodline backend architecture, request processing lifecycles, concurrency controls, biological cross-matching rules, data models, route-by-route execution flows, and implemented enterprise architectural optimizations.
 
 ---
 
 ## 1. System Architecture Overview
 
-SmartBlood is built with **FastAPI (Python 3.12/3.13)**, **PostgreSQL 16 + PostGIS 3.4**, **Redis 7.2**, **SQLAlchemy 2.0 (Async)**, and **WebSockets**. It solves dynamic emergency blood allocation using an elastic, multi-tier optimization pipeline:
+Bloodline is built with **FastAPI (Python 3.12/3.13)**, **PostgreSQL 16 + PostGIS 3.4**, **Redis 7.2**, **SQLAlchemy 2.0 (Async)**, and **WebSockets**. It solves dynamic emergency blood allocation using an elastic, multi-tier optimization pipeline:
 
 1. **Tier 1 (Cold-Chain Inventory)**: Immediate First-Expired, First-Out (FEFO) reserve matching from nearby blood bank stocks with database row-level locking (`SELECT ... FOR UPDATE SKIP LOCKED`) and partial index acceleration.
 2. **Tier 2 (Live Donor Proximity Geofencing & Multi-Unit Slot Claims)**: Multi-candidate parallel broadcast with distributed soft-lock alert zones and atomic per-unit slot claims via an atomic Redis Lua script (`LUA_CLAIM_SLOT`), enabling $N$ units to be secured by $N$ distinct donors concurrently without race conditions.

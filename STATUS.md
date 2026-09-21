@@ -1,4 +1,4 @@
-# SmartBlood (Yarin) — Project Status
+# Bloodline — Project Status
 
 **Last Updated:** September 19, 2026  
 **Current Phase:** Real-Time Routing, Android Integration, Donor Location Freshness TTL & Background Heartbeats Complete  
@@ -10,7 +10,7 @@
 
 ## 1. Project Overview
 
-SmartBlood (Yarin) is an intelligent, real-time emergency blood allocation and voluntary donor dispatch platform. It bridges hospitals, blood banks, and voluntary donors with geospatial proximity matching, automated compatibility checks, distributed concurrency locks, background task workers, and live WebSocket updates.
+Bloodline is an intelligent, real-time emergency blood allocation and voluntary donor dispatch platform. It bridges hospitals, blood banks, and voluntary donors with geospatial proximity matching, automated compatibility checks, distributed concurrency locks, background task workers, and live WebSocket updates.
 
 ---
 
